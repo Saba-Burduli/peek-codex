@@ -12,4 +12,4 @@ App-server is Codex's rich-client integration surface and avoids coupling this t
 
 ## Consequences
 
-Codex Slice never opens Codex SQLite or JSONL storage. Unknown response fields are tolerated, the unstable `path` field is ignored, and incompatible Codex versions fail with a focused error rather than falling back to private data.
+Peek Codex never opens Codex SQLite or JSONL storage. Unknown response fields are tolerated, the unstable `path` field is ignored, and incompatible Codex versions fail with a focused error rather than falling back to private data.

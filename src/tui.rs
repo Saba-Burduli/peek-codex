@@ -21,7 +21,7 @@ use std::time::{Duration, SystemTime};
 pub fn run() -> Result<(), String> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         return Err(
-            "an interactive terminal is required; run `codex-slice` directly in a terminal"
+            "an interactive terminal is required; run `peek-codex` directly in a terminal"
                 .to_owned(),
         );
     }
@@ -132,7 +132,7 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
     };
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled("Codex Slice", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled("Peek Codex", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw("  "),
             Span::styled(status, Style::default().fg(Color::DarkGray)),
         ]))

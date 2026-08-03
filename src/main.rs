@@ -7,13 +7,13 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const HELP: &str = "Codex Slice — browse local Codex sessions\n\nUsage: codex-slice [OPTIONS]\n\nOptions:\n      --log-file <PATH>  Append structured diagnostics to PATH\n  -h, --help             Print help\n  -V, --version          Print version";
+const HELP: &str = "Peek Codex — browse local Codex sessions\n\nUsage: peek-codex [OPTIONS]\n\nOptions:\n      --log-file <PATH>  Append structured diagnostics to PATH\n  -h, --help             Print help\n  -V, --version          Print version";
 
 fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("codex-slice: {error}");
+            eprintln!("peek-codex: {error}");
             ExitCode::FAILURE
         }
     }
@@ -27,7 +27,7 @@ fn run() -> Result<(), String> {
             return Ok(());
         }
         Action::Version => {
-            println!("codex-slice {}", env!("CARGO_PKG_VERSION"));
+            println!("peek-codex {}", env!("CARGO_PKG_VERSION"));
             return Ok(());
         }
         Action::Run => {}
@@ -41,7 +41,7 @@ fn run() -> Result<(), String> {
     if let Some(log) = diagnostics.as_mut() {
         log.event("start")?;
     }
-    let result = codex_slice::tui::run();
+    let result = peek_codex::tui::run();
     if let Some(log) = diagnostics.as_mut() {
         let event = if result.is_ok() { "stop" } else { "failure" };
         log.event(event)?;
@@ -73,16 +73,14 @@ fn parse_args(arguments: impl Iterator<Item = OsString>) -> Result<Options, Stri
             Some("-V" | "--version") => action = Action::Version,
             Some("--log-file") => {
                 let path = arguments.next().ok_or_else(|| {
-                    "--log-file requires a path; run `codex-slice --help`".to_owned()
+                    "--log-file requires a path; run `peek-codex --help`".to_owned()
                 })?;
                 if log_file.replace(PathBuf::from(path)).is_some() {
                     return Err("--log-file may only be provided once".to_owned());
                 }
             }
             Some(value) => {
-                return Err(format!(
-                    "unknown option `{value}`; run `codex-slice --help`"
-                ));
+                return Err(format!("unknown option `{value}`; run `peek-codex --help`"));
             }
             None => return Err("arguments must be valid UTF-8".to_owned()),
         }

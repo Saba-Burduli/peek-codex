@@ -1,6 +1,6 @@
-# Codex Slice
+# Peek Codex
 
-Codex Slice is a fast, read-only terminal browser for local Codex sessions. The first vertical slice lists real sessions through the supported Codex app-server boundary, keeps loading later pages in the background, and provides predictable keyboard navigation.
+Peek Codex is a fast, read-only terminal browser for local Codex sessions. The first vertical slice lists real sessions through the supported Codex app-server boundary, keeps loading later pages in the background, and provides predictable keyboard navigation.
 
 ## Requirements
 

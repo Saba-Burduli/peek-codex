@@ -1,13 +1,13 @@
 #![cfg(unix)]
 
-use codex_slice::codex::{AppServerSource, CodexSessionSource};
+use peek_codex::codex::{AppServerSource, CodexSessionSource};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process;
 
 fn fake_server() -> (PathBuf, PathBuf, PathBuf) {
-    let directory = std::env::temp_dir().join(format!("codex-slice-test-{}", process::id()));
+    let directory = std::env::temp_dir().join(format!("peek-codex-test-{}", process::id()));
     fs::create_dir_all(&directory).unwrap();
     let executable = directory.join("codex");
     let requests = directory.join("requests.log");

@@ -84,8 +84,8 @@ impl AppServerSource {
             "initialize",
             json!({
                 "clientInfo": {
-                    "name": "codex-slice",
-                    "title": "Codex Slice",
+                    "name": "peek-codex",
+                    "title": "Peek Codex",
                     "version": env!("CARGO_PKG_VERSION")
                 }
             }),

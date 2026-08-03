@@ -1,6 +1,6 @@
 # Codex integration
 
-Codex Slice starts `codex app-server --stdio`, sends `initialize`, then sends the `initialized` notification. Listing uses stable `thread/list` requests with:
+Peek Codex starts `codex app-server --stdio`, sends `initialize`, then sends the `initialized` notification. Listing uses stable `thread/list` requests with:
 
 - `useStateDbOnly: true`
 - `sortKey: "recency_at"`
