@@ -2,12 +2,12 @@
 
 ## Slice 1: repository foundation and basic browser
 
-- [ ] Establish repository guidance, documentation, ADRs, and MIT licensing.
-- [ ] Add the typed session domain and Codex app-server adapter.
-- [ ] Test parsing, pagination, malformed errors, and a fake app-server handshake.
-- [ ] Add the responsive session-list TUI and CLI.
-- [ ] Model loading, ready, empty, and failure states.
-- [ ] Validate formatting, linting, tests, locked build, and a real PTY smoke test.
+- [x] Establish repository guidance, documentation, ADRs, and MIT licensing.
+- [x] Add the typed session domain and Codex app-server adapter.
+- [x] Test parsing, pagination, malformed errors, and a fake app-server handshake.
+- [x] Add the responsive session-list TUI and CLI.
+- [x] Model loading, ready, empty, and failure states.
+- [x] Validate formatting, linting, tests, locked build, and a real PTY smoke test.
 
 ## Deferred
 

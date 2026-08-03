@@ -128,24 +128,9 @@ impl AppServerSource {
             let response: Value = serde_json::from_str(&line).map_err(|error| {
                 SourceError::new(format!("app-server returned invalid JSON: {error}"))
             })?;
-            if response.get("id").and_then(Value::as_u64) != Some(id) {
-                continue;
+            if let Some(result) = decode_response(response, id)? {
+                return Ok(result);
             }
-            if let Some(error) = response.get("error") {
-                let message = error
-                    .get("message")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| {
-                        SourceError::new("app-server returned a malformed JSON-RPC error")
-                    })?;
-                return Err(SourceError::new(format!(
-                    "app-server request failed: {message}"
-                )));
-            }
-            return response
-                .get("result")
-                .cloned()
-                .ok_or_else(|| SourceError::new("app-server response did not contain a result"));
         }
     }
 
@@ -160,6 +145,26 @@ impl AppServerSource {
                 SourceError::new(format!("could not write app-server request: {error}"))
             })
     }
+}
+
+fn decode_response(response: Value, expected_id: u64) -> Result<Option<Value>, SourceError> {
+    if response.get("id").and_then(Value::as_u64) != Some(expected_id) {
+        return Ok(None);
+    }
+    if let Some(error) = response.get("error") {
+        let message = error
+            .get("message")
+            .and_then(Value::as_str)
+            .ok_or_else(|| SourceError::new("app-server returned a malformed JSON-RPC error"))?;
+        return Err(SourceError::new(format!(
+            "app-server request failed: {message}"
+        )));
+    }
+    response
+        .get("result")
+        .cloned()
+        .map(Some)
+        .ok_or_else(|| SourceError::new("app-server response did not contain a result"))
 }
 
 impl CodexSessionSource for AppServerSource {
@@ -329,7 +334,11 @@ mod tests {
         let error: Value =
             serde_json::from_str(include_str!("../tests/fixtures/malformed-rpc-error.json"))
                 .unwrap();
-        assert!(error["error"].get("message").is_none());
+        let error = decode_response(error, 3).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "app-server returned a malformed JSON-RPC error"
+        );
     }
 
     #[test]
