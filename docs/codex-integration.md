@@ -11,9 +11,9 @@ Peek Codex starts `codex app-server --stdio`, sends `initialize`, then sends the
 
 `thread/read` is exposed through the typed source boundary with `includeTurns: false`, but is not invoked by the first UI slice. Storage paths are never consumed and there is no SQLite or JSONL fallback.
 
-Codex CLI 0.146.0 is the minimum locally verified version. Protocol or startup failures become actionable UI errors. The app-server command is the intended rich-client surface but remains a compatibility risk, so the protocol is isolated in one module.
+Codex CLI 0.146.0 is the minimum locally verified version. Each request has a 10-second deadline and checks cancellation while waiting for app-server output. Protocol or startup failures become actionable UI errors. The app-server command is the intended rich-client surface but remains a compatibility risk, so the protocol is isolated in one module.
 
-Future resume handoff must first restore the terminal and stop app-server, then execute `codex resume <uuid>` with inherited stdio.
+Future resume handoff must first restore the terminal and stop app-server, then execute `codex resume <uuid>` with inherited stdio. Normal exit already cancels loading, kills and waits for app-server, and joins the loader worker.
 
 ## Discovery baseline
 

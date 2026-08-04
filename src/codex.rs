@@ -5,8 +5,15 @@ use std::fmt;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::Path;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 const PAGE_SIZE: u32 = 50;
+pub(crate) const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const RESPONSE_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 pub trait CodexSessionSource {
     fn list_sessions(&mut self, cursor: Option<&str>) -> Result<SessionPage, SourceError>;
@@ -37,16 +44,38 @@ impl std::error::Error for SourceError {}
 pub struct AppServerSource {
     child: Child,
     writer: BufWriter<ChildStdin>,
-    reader: BufReader<ChildStdout>,
+    responses: Receiver<Result<String, String>>,
+    reader_thread: Option<JoinHandle<()>>,
     next_id: u64,
+    request_timeout: Duration,
+    cancelled: Arc<AtomicBool>,
 }
 
 impl AppServerSource {
     pub fn spawn() -> Result<Self, SourceError> {
-        Self::spawn_program(Path::new("codex"))
+        Self::spawn_program_with_control(
+            Path::new("codex"),
+            DEFAULT_REQUEST_TIMEOUT,
+            Arc::new(AtomicBool::new(false)),
+        )
     }
 
     pub fn spawn_program(program: &Path) -> Result<Self, SourceError> {
+        Self::spawn_program_with_timeout(program, DEFAULT_REQUEST_TIMEOUT)
+    }
+
+    fn spawn_program_with_timeout(
+        program: &Path,
+        request_timeout: Duration,
+    ) -> Result<Self, SourceError> {
+        Self::spawn_program_with_control(program, request_timeout, Arc::new(AtomicBool::new(false)))
+    }
+
+    pub(crate) fn spawn_program_with_control(
+        program: &Path,
+        request_timeout: Duration,
+        cancelled: Arc<AtomicBool>,
+    ) -> Result<Self, SourceError> {
         let mut command = Command::new(program);
         command
             .arg("app-server")
@@ -68,12 +97,17 @@ impl AppServerSource {
             .stdout
             .take()
             .ok_or_else(|| SourceError::new("app-server stdout was unavailable"))?;
+        let (response_sender, responses) = mpsc::channel();
+        let reader_thread = thread::spawn(move || read_responses(stdout, response_sender));
 
         let mut source = Self {
             child,
             writer: BufWriter::new(stdin),
-            reader: BufReader::new(stdout),
+            responses,
+            reader_thread: Some(reader_thread),
             next_id: 1,
+            request_timeout,
+            cancelled,
         };
         source.initialize()?;
         Ok(source)
@@ -113,23 +147,37 @@ impl AppServerSource {
             "method": method,
             "params": params,
         }))?;
+        let deadline = Instant::now() + self.request_timeout;
 
         loop {
-            let mut line = String::new();
-            let bytes = self.reader.read_line(&mut line).map_err(|error| {
-                SourceError::new(format!("could not read app-server response: {error}"))
-            })?;
-            if bytes == 0 {
-                return Err(SourceError::new(
-                    "app-server exited before replying; Codex CLI 0.146.0 or newer is required",
-                ));
+            if self.cancelled.load(Ordering::Relaxed) {
+                return Err(SourceError::new("app-server request cancelled"));
             }
-
-            let response: Value = serde_json::from_str(&line).map_err(|error| {
-                SourceError::new(format!("app-server returned invalid JSON: {error}"))
-            })?;
-            if let Some(result) = decode_response(response, id)? {
-                return Ok(result);
+            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                return Err(SourceError::new(format!(
+                    "app-server `{method}` request timed out after {} seconds",
+                    self.request_timeout.as_secs_f32()
+                )));
+            };
+            match self
+                .responses
+                .recv_timeout(remaining.min(RESPONSE_POLL_INTERVAL))
+            {
+                Ok(Ok(line)) => {
+                    let response: Value = serde_json::from_str(&line).map_err(|error| {
+                        SourceError::new(format!("app-server returned invalid JSON: {error}"))
+                    })?;
+                    if let Some(result) = decode_response(response, id)? {
+                        return Ok(result);
+                    }
+                }
+                Ok(Err(message)) => return Err(SourceError::new(message)),
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => {
+                    return Err(SourceError::new(
+                        "app-server response channel closed unexpectedly",
+                    ));
+                }
             }
         }
     }
@@ -199,8 +247,37 @@ impl CodexSessionSource for AppServerSource {
 
 impl Drop for AppServerSource {
     fn drop(&mut self) {
+        self.cancelled.store(true, Ordering::Relaxed);
         let _ = self.child.kill();
         let _ = self.child.wait();
+        if let Some(reader_thread) = self.reader_thread.take() {
+            let _ = reader_thread.join();
+        }
+    }
+}
+
+fn read_responses(stdout: ChildStdout, sender: mpsc::Sender<Result<String, String>>) {
+    let mut reader = BufReader::new(stdout);
+    loop {
+        let mut line = String::new();
+        match reader.read_line(&mut line) {
+            Ok(0) => {
+                let _ = sender.send(Err(
+                    "app-server exited before replying; Codex CLI 0.146.0 or newer is required"
+                        .to_owned(),
+                ));
+                return;
+            }
+            Ok(_) => {
+                if sender.send(Ok(line)).is_err() {
+                    return;
+                }
+            }
+            Err(error) => {
+                let _ = sender.send(Err(format!("could not read app-server response: {error}")));
+                return;
+            }
+        }
     }
 }
 
@@ -310,6 +387,13 @@ fn display_source(source: &Value) -> String {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+    #[cfg(unix)]
+    use std::time::Instant;
+
     #[test]
     fn decodes_redacted_fixture_without_leaking_nested_content() {
         let fixture: Value =
@@ -344,5 +428,39 @@ mod tests {
     #[test]
     fn displays_unknown_source_without_failing() {
         assert_eq!(display_source(&json!({"future": true})), "unknown");
+    }
+
+    #[test]
+    fn production_request_timeout_is_ten_seconds() {
+        assert_eq!(DEFAULT_REQUEST_TIMEOUT, Duration::from_secs(10));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn configured_request_timeout_is_enforced() {
+        let directory =
+            std::env::temp_dir().join(format!("peek-codex-timeout-test-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        let executable = directory.join("codex");
+        fs::write(
+            &executable,
+            "#!/bin/sh\nIFS= read -r line || exit 1\nwhile IFS= read -r ignored; do :; done\n",
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&executable).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&executable, permissions).unwrap();
+        let started = Instant::now();
+
+        let error =
+            AppServerSource::spawn_program_with_timeout(&executable, Duration::from_millis(100))
+                .err()
+                .expect("silent server should time out");
+        let elapsed = started.elapsed();
+
+        assert!(error.to_string().contains("initialize` request timed out"));
+        assert!(elapsed >= Duration::from_millis(80));
+        assert!(elapsed < Duration::from_secs(1));
+        fs::remove_dir_all(directory).unwrap();
     }
 }

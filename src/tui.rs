@@ -13,9 +13,10 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use std::io::{self, IsTerminal};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
-use std::thread;
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime};
 
 pub fn run() -> Result<(), String> {
@@ -26,61 +27,103 @@ pub fn run() -> Result<(), String> {
         );
     }
 
-    let stop = Arc::new(AtomicBool::new(false));
-    let receiver = spawn_loader(Arc::clone(&stop));
     let guard =
         TerminalGuard::enter().map_err(|error| format!("terminal setup failed: {error}"))?;
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)
         .map_err(|error| format!("could not initialize terminal: {error}"))?;
+    let mut loader = Loader::start();
     let mut app = App::default();
-    let result = event_loop(&mut terminal, &mut app, receiver);
-    stop.store(true, Ordering::Relaxed);
+    let result = event_loop(&mut terminal, &mut app, &loader.receiver);
+    loader.cancel();
     drop(terminal);
     drop(guard);
-    result
+    result.and(loader.join())
 }
 
-fn spawn_loader(stop: Arc<AtomicBool>) -> mpsc::Receiver<WorkerMessage> {
-    let (sender, receiver) = mpsc::channel();
-    thread::spawn(move || {
-        let mut source = match AppServerSource::spawn() {
-            Ok(source) => source,
-            Err(error) => {
-                let _ = sender.send(WorkerMessage::Failed(error.to_string()));
-                return;
-            }
-        };
-        let mut cursor = None;
+struct Loader {
+    receiver: mpsc::Receiver<WorkerMessage>,
+    stop: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+}
 
-        loop {
-            if stop.load(Ordering::Relaxed) {
-                return;
-            }
-            let page = match source.list_sessions(cursor.as_deref()) {
-                Ok(page) => page,
+impl Loader {
+    fn start() -> Self {
+        Self::start_with_program(Path::new("codex"), crate::codex::DEFAULT_REQUEST_TIMEOUT)
+    }
+
+    fn start_with_program(program: &Path, request_timeout: Duration) -> Self {
+        let (sender, receiver) = mpsc::channel();
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker_stop = Arc::clone(&stop);
+        let program = program.to_owned();
+        let thread = thread::spawn(move || {
+            let mut source = match AppServerSource::spawn_program_with_control(
+                &program,
+                request_timeout,
+                Arc::clone(&worker_stop),
+            ) {
+                Ok(source) => source,
                 Err(error) => {
                     let _ = sender.send(WorkerMessage::Failed(error.to_string()));
                     return;
                 }
             };
-            cursor.clone_from(&page.next_cursor);
-            if sender.send(WorkerMessage::Page(page)).is_err() {
-                return;
+            let mut cursor = None;
+
+            loop {
+                if worker_stop.load(Ordering::Relaxed) {
+                    return;
+                }
+                let page = match source.list_sessions(cursor.as_deref()) {
+                    Ok(page) => page,
+                    Err(error) => {
+                        let _ = sender.send(WorkerMessage::Failed(error.to_string()));
+                        return;
+                    }
+                };
+                cursor.clone_from(&page.next_cursor);
+                if sender.send(WorkerMessage::Page(page)).is_err() {
+                    return;
+                }
+                if cursor.is_none() {
+                    let _ = sender.send(WorkerMessage::Complete);
+                    return;
+                }
             }
-            if cursor.is_none() {
-                let _ = sender.send(WorkerMessage::Complete);
-                return;
-            }
+        });
+        Self {
+            receiver,
+            stop,
+            thread: Some(thread),
         }
-    });
-    receiver
+    }
+
+    fn cancel(&self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+
+    fn join(&mut self) -> Result<(), String> {
+        let Some(thread) = self.thread.take() else {
+            return Ok(());
+        };
+        thread
+            .join()
+            .map_err(|_| "session loader thread panicked".to_owned())
+    }
+}
+
+impl Drop for Loader {
+    fn drop(&mut self) {
+        self.cancel();
+        let _ = self.join();
+    }
 }
 
 fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
-    receiver: mpsc::Receiver<WorkerMessage>,
+    receiver: &mpsc::Receiver<WorkerMessage>,
 ) -> Result<(), String> {
     loop {
         for message in receiver.try_iter() {
@@ -240,6 +283,15 @@ impl Drop for TerminalGuard {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+    #[cfg(unix)]
+    use std::process::{Command, Stdio};
+    #[cfg(unix)]
+    use std::time::Instant;
+
     #[test]
     fn truncates_at_terminal_width() {
         assert_eq!(truncate("hello", 5), "hello");
@@ -259,5 +311,52 @@ mod tests {
             KeyCode::Char('c'),
             KeyModifiers::CONTROL
         )));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancellation_joins_loader_and_stops_child() {
+        let directory =
+            std::env::temp_dir().join(format!("peek-codex-loader-test-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        let executable = directory.join("codex");
+        let pid_file = directory.join("pid");
+        let script = format!(
+            r#"#!/bin/sh
+printf '%s' "$$" > '{}'
+IFS= read -r initialize || exit 1
+printf '%s\n' '{{"jsonrpc":"2.0","id":1,"result":{{"userAgent":"fake"}}}}'
+IFS= read -r initialized || exit 1
+IFS= read -r list || exit 1
+while IFS= read -r ignored; do :; done
+"#,
+            pid_file.display()
+        );
+        fs::write(&executable, script).unwrap();
+        let mut permissions = fs::metadata(&executable).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&executable, permissions).unwrap();
+
+        let mut loader = Loader::start_with_program(&executable, Duration::from_secs(5));
+        for _ in 0..100 {
+            if pid_file.exists() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        let pid = fs::read_to_string(&pid_file).unwrap();
+        let started = Instant::now();
+        loader.cancel();
+        loader.join().unwrap();
+
+        assert!(started.elapsed() < Duration::from_secs(1));
+        let child_is_running = Command::new("kill")
+            .args(["-0", pid.trim()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success());
+        assert!(!child_is_running, "fake app-server child remained alive");
+        fs::remove_dir_all(directory).unwrap();
     }
 }
