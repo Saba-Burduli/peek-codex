@@ -20,3 +20,11 @@
 - [ ] Add Windows-specific process handoff.
 
 Out of scope: AI summaries, telemetry, session mutation, direct storage parsing, an async runtime, and fuzzy-search dependencies.
+
+## Quality hardening
+
+- [x] Define numbered acceptance requirements and an independent testing-agent gate.
+- [ ] Bound app-server requests and make loader shutdown deterministic.
+- [ ] Reject repeated pagination cursors and preserve partial results and selection.
+- [ ] Sanitize failure text and enforce the terminal-text length bound.
+- [ ] Render rows using terminal display-cell width.
