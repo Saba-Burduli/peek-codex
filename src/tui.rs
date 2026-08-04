@@ -404,6 +404,7 @@ read_request
 printf '%s\n' '{{"jsonrpc":"2.0","id":2,"result":{{"data":[],"nextCursor":"repeat"}}}}'
 read_request
 printf '%s\n' '{{"jsonrpc":"2.0","id":3,"result":{{"data":[],"nextCursor":"repeat"}}}}'
+while IFS= read -r ignored; do :; done
 "#,
             requests.display()
         );
