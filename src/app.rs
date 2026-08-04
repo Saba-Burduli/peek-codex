@@ -1,4 +1,4 @@
-use crate::domain::{Session, SessionPage};
+use crate::domain::{Session, SessionPage, sanitize_terminal_text};
 use std::collections::HashSet;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -70,6 +70,7 @@ impl App {
         match message {
             WorkerMessage::Page(page) => self.append_page(page),
             WorkerMessage::Failed(message) => {
+                let message = sanitize_failure_message(&message);
                 self.loading_more = false;
                 if self.sessions.is_empty() {
                     self.state = LoadState::Failed(message);
@@ -140,6 +141,15 @@ impl App {
         };
         self.loading_more = page.next_cursor.is_some();
         self.warning = None;
+    }
+}
+
+fn sanitize_failure_message(message: &str) -> String {
+    let message = sanitize_terminal_text(message);
+    if message.is_empty() {
+        "unknown app-server error".to_owned()
+    } else {
+        message
     }
 }
 
@@ -253,6 +263,38 @@ mod tests {
         assert_eq!(
             app.sessions()[app.selected().unwrap()].id.as_str(),
             "selected"
+        );
+    }
+
+    #[test]
+    fn sanitizes_and_bounds_fatal_and_partial_failure_messages() {
+        let hostile = format!("first line\n\u{1b}[31m{}", "x".repeat(300));
+        let expected = sanitize_terminal_text(&hostile);
+        let mut fatal = App::default();
+
+        fatal.apply(WorkerMessage::Failed(hostile.clone()));
+
+        assert_eq!(fatal.state(), &LoadState::Failed(expected.clone()));
+        assert!(!expected.contains('\n'));
+        assert!(!expected.contains('\u{1b}'));
+        assert!(expected.chars().count() <= 240);
+
+        let mut partial = App::default();
+        partial.apply(WorkerMessage::Page(SessionPage {
+            sessions: vec![session("loaded", 1)],
+            next_cursor: Some("next".to_owned()),
+        }));
+        partial.apply(WorkerMessage::Failed(hostile));
+        assert_eq!(partial.warning(), Some(expected.as_str()));
+    }
+
+    #[test]
+    fn replaces_empty_failure_messages() {
+        let mut app = App::default();
+        app.apply(WorkerMessage::Failed("\n\t".to_owned()));
+        assert_eq!(
+            app.state(),
+            &LoadState::Failed("unknown app-server error".to_owned())
         );
     }
 }

@@ -433,4 +433,56 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":3,"result":{{"data":[],"nextCursor":"repea
         assert_eq!(captured.matches("\"method\":\"thread/list\"").count(), 2);
         fs::remove_dir_all(directory).unwrap();
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn valid_second_page_rpc_error_becomes_sanitized_partial_warning() {
+        let directory =
+            std::env::temp_dir().join(format!("peek-codex-rpc-error-test-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        let executable = directory.join("codex");
+        let hostile = format!("second page\n\u{1b}[31m{}", "x".repeat(300));
+        let error_response = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "error": {"code": -32603, "message": hostile}
+        })
+        .to_string();
+        let script = format!(
+            r#"#!/bin/sh
+IFS= read -r initialize || exit 1
+printf '%s\n' '{{"jsonrpc":"2.0","id":1,"result":{{"userAgent":"fake"}}}}'
+IFS= read -r initialized || exit 1
+IFS= read -r first_page || exit 1
+printf '%s\n' '{{"jsonrpc":"2.0","id":2,"result":{{"data":[{{"id":"loaded","name":null,"preview":"Loaded","cwd":"/tmp/project","createdAt":1,"updatedAt":2,"recencyAt":2,"modelProvider":"openai","source":"cli","status":{{"type":"notLoaded"}},"gitInfo":null}}],"nextCursor":"next"}}}}'
+IFS= read -r second_page || exit 1
+printf '%s\n' '{}'
+"#,
+            error_response
+        );
+        fs::write(&executable, script).unwrap();
+        let mut permissions = fs::metadata(&executable).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&executable, permissions).unwrap();
+
+        let mut loader = Loader::start_with_program(&executable, Duration::from_secs(2));
+        let mut app = App::default();
+        for _ in 0..2 {
+            app.apply(
+                loader
+                    .receiver
+                    .recv_timeout(Duration::from_secs(1))
+                    .unwrap(),
+            );
+        }
+        loader.join().unwrap();
+
+        assert_eq!(app.state(), &LoadState::Ready);
+        assert_eq!(app.sessions()[0].id.as_str(), "loaded");
+        let warning = app.warning().expect("partial warning");
+        assert!(!warning.contains('\n'));
+        assert!(!warning.contains('\u{1b}'));
+        assert!(warning.chars().count() <= 240);
+        fs::remove_dir_all(directory).unwrap();
+    }
 }

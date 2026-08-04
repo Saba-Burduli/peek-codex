@@ -71,6 +71,7 @@ impl std::error::Error for DomainError {}
 pub fn sanitize_terminal_text(value: &str) -> String {
     let mut result = String::with_capacity(value.len().min(240));
     let mut pending_space = false;
+    let mut characters = 0;
 
     for character in value.chars() {
         if character.is_control() || character.is_whitespace() {
@@ -78,13 +79,18 @@ pub fn sanitize_terminal_text(value: &str) -> String {
             continue;
         }
         if pending_space {
+            if characters + 1 >= 240 {
+                break;
+            }
             result.push(' ');
+            characters += 1;
             pending_space = false;
         }
-        if result.chars().count() == 240 {
+        if characters == 240 {
             break;
         }
         result.push(character);
+        characters += 1;
     }
 
     result
@@ -146,6 +152,24 @@ mod tests {
     fn truncates_sanitized_text_by_characters() {
         let result = sanitize_terminal_text(&"é".repeat(300));
         assert_eq!(result.chars().count(), 240);
+    }
+
+    #[test]
+    fn pending_space_never_exceeds_terminal_text_limit() {
+        let input = format!("{} next", "x".repeat(240));
+        let result = sanitize_terminal_text(&input);
+
+        assert_eq!(result.chars().count(), 240);
+        assert_eq!(result, "x".repeat(240));
+    }
+
+    #[test]
+    fn truncation_does_not_leave_a_synthetic_trailing_space() {
+        let input = format!("{} next", "x".repeat(239));
+        let result = sanitize_terminal_text(&input);
+
+        assert_eq!(result, "x".repeat(239));
+        assert!(!result.ends_with(' '));
     }
 
     #[test]
