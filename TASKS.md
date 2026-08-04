@@ -25,6 +25,8 @@ Out of scope: AI summaries, telemetry, session mutation, direct storage parsing,
 
 - [x] Define numbered acceptance requirements and an independent testing-agent gate.
 - [x] Bound app-server requests and make loader shutdown deterministic.
-- [ ] Reject repeated pagination cursors and preserve partial results and selection.
+- [x] Reject repeated pagination cursors and preserve partial results and selection.
 - [ ] Sanitize failure text and enforce the terminal-text length bound.
 - [ ] Render rows using terminal display-cell width.
+- [ ] Add explicit `A → B → A` cursor-cycle regression coverage.
+- [ ] Add a fake-server page-success-then-RPC-error integration test.

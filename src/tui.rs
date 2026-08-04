@@ -12,6 +12,7 @@ use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
+use std::collections::HashSet;
 use std::io::{self, IsTerminal};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -70,6 +71,7 @@ impl Loader {
                 }
             };
             let mut cursor = None;
+            let mut seen_cursors = HashSet::new();
 
             loop {
                 if worker_stop.load(Ordering::Relaxed) {
@@ -82,13 +84,22 @@ impl Loader {
                         return;
                     }
                 };
-                cursor.clone_from(&page.next_cursor);
+                let next_cursor = page.next_cursor.clone();
                 if sender.send(WorkerMessage::Page(page)).is_err() {
                     return;
                 }
-                if cursor.is_none() {
-                    let _ = sender.send(WorkerMessage::Complete);
-                    return;
+                match next_cursor {
+                    None => {
+                        let _ = sender.send(WorkerMessage::Complete);
+                        return;
+                    }
+                    Some(next_cursor) if !seen_cursors.insert(next_cursor.clone()) => {
+                        let _ = sender.send(WorkerMessage::Failed(
+                            "app-server returned a repeated pagination cursor".to_owned(),
+                        ));
+                        return;
+                    }
+                    Some(next_cursor) => cursor = Some(next_cursor),
                 }
             }
         });
@@ -158,14 +169,18 @@ fn should_quit(key: KeyEvent) -> bool {
 }
 
 fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
+    let footer_height = if app.warning().is_some() { 2 } else { 1 };
     let areas = Layout::vertical([
         Constraint::Length(3),
         Constraint::Min(1),
-        Constraint::Length(1),
+        Constraint::Length(footer_height),
     ])
     .split(frame.area());
     let status = match app.state() {
         LoadState::Loading => "loading sessions".to_owned(),
+        LoadState::Ready if app.warning().is_some() => {
+            format!("{} sessions · partial", app.sessions().len())
+        }
         LoadState::Ready if app.loading_more() => {
             format!("{} sessions · loading more", app.sessions().len())
         }
@@ -203,9 +218,17 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
         _ => render_list(frame, areas[1], app),
     }
 
+    let keys = "↑/k ↓/j navigate  Home/End jump  q/Esc/Ctrl-C quit";
+    let footer = app
+        .warning()
+        .map(|warning| format!("Partial results: {warning}\n{keys}"))
+        .unwrap_or_else(|| keys.to_owned());
     frame.render_widget(
-        Paragraph::new("↑/k ↓/j navigate  Home/End jump  q/Esc/Ctrl-C quit")
-            .style(Style::default().fg(Color::DarkGray)),
+        Paragraph::new(footer).style(Style::default().fg(if app.warning().is_some() {
+            Color::Yellow
+        } else {
+            Color::DarkGray
+        })),
         areas[2],
     );
 }
@@ -357,6 +380,57 @@ while IFS= read -r ignored; do :; done
             .status()
             .is_ok_and(|status| status.success());
         assert!(!child_is_running, "fake app-server child remained alive");
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn repeated_cursor_stops_pagination_without_third_request() {
+        let directory =
+            std::env::temp_dir().join(format!("peek-codex-cursor-test-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        let executable = directory.join("codex");
+        let requests = directory.join("requests");
+        let script = format!(
+            r#"#!/bin/sh
+read_request() {{
+  IFS= read -r line || exit 1
+  printf '%s\n' "$line" >> '{}'
+}}
+read_request
+printf '%s\n' '{{"jsonrpc":"2.0","id":1,"result":{{"userAgent":"fake"}}}}'
+read_request
+read_request
+printf '%s\n' '{{"jsonrpc":"2.0","id":2,"result":{{"data":[],"nextCursor":"repeat"}}}}'
+read_request
+printf '%s\n' '{{"jsonrpc":"2.0","id":3,"result":{{"data":[],"nextCursor":"repeat"}}}}'
+"#,
+            requests.display()
+        );
+        fs::write(&executable, script).unwrap();
+        let mut permissions = fs::metadata(&executable).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&executable, permissions).unwrap();
+
+        let mut loader = Loader::start_with_program(&executable, Duration::from_secs(2));
+        let messages: Vec<_> = (0..3)
+            .map(|_| {
+                loader
+                    .receiver
+                    .recv_timeout(Duration::from_secs(1))
+                    .unwrap()
+            })
+            .collect();
+        loader.join().unwrap();
+
+        assert!(matches!(messages[0], WorkerMessage::Page(_)));
+        assert!(matches!(messages[1], WorkerMessage::Page(_)));
+        assert!(matches!(
+            &messages[2],
+            WorkerMessage::Failed(message) if message.contains("repeated pagination cursor")
+        ));
+        let captured = fs::read_to_string(&requests).unwrap();
+        assert_eq!(captured.matches("\"method\":\"thread/list\"").count(), 2);
         fs::remove_dir_all(directory).unwrap();
     }
 }

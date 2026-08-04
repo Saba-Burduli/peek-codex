@@ -30,6 +30,7 @@ pub struct App {
     selected: Option<usize>,
     state: LoadState,
     loading_more: bool,
+    warning: Option<String>,
 }
 
 impl Default for App {
@@ -39,6 +40,7 @@ impl Default for App {
             selected: None,
             state: LoadState::Loading,
             loading_more: true,
+            warning: None,
         }
     }
 }
@@ -60,15 +62,25 @@ impl App {
         self.loading_more
     }
 
+    pub fn warning(&self) -> Option<&str> {
+        self.warning.as_deref()
+    }
+
     pub fn apply(&mut self, message: WorkerMessage) {
         match message {
             WorkerMessage::Page(page) => self.append_page(page),
             WorkerMessage::Failed(message) => {
                 self.loading_more = false;
-                self.state = LoadState::Failed(message);
+                if self.sessions.is_empty() {
+                    self.state = LoadState::Failed(message);
+                } else {
+                    self.state = LoadState::Ready;
+                    self.warning = Some(message);
+                }
             }
             WorkerMessage::Complete => {
                 self.loading_more = false;
+                self.warning = None;
                 self.state = if self.sessions.is_empty() {
                     LoadState::Empty
                 } else {
@@ -93,6 +105,10 @@ impl App {
     }
 
     fn append_page(&mut self, page: SessionPage) {
+        let selected_id = self
+            .selected
+            .and_then(|index| self.sessions.get(index))
+            .map(|session| session.id.as_str().to_owned());
         let mut ids: HashSet<_> = self
             .sessions
             .iter()
@@ -110,15 +126,20 @@ impl App {
                 .then_with(|| right.updated_at.cmp(&left.updated_at))
                 .then_with(|| left.id.as_str().cmp(right.id.as_str()))
         });
-        if self.selected.is_none() && !self.sessions.is_empty() {
-            self.selected = Some(0);
-        }
+        self.selected = selected_id
+            .and_then(|selected_id| {
+                self.sessions
+                    .iter()
+                    .position(|session| session.id.as_str() == selected_id)
+            })
+            .or_else(|| (!self.sessions.is_empty()).then_some(0));
         self.state = if self.sessions.is_empty() {
             LoadState::Loading
         } else {
             LoadState::Ready
         };
         self.loading_more = page.next_cursor.is_some();
+        self.warning = None;
     }
 }
 
@@ -191,5 +212,47 @@ mod tests {
         assert_eq!(app.selected(), Some(1));
         app.navigate(Navigation::Home);
         assert_eq!(app.selected(), Some(0));
+    }
+
+    #[test]
+    fn later_failure_keeps_loaded_sessions_usable() {
+        let mut app = App::default();
+        app.apply(WorkerMessage::Page(SessionPage {
+            sessions: vec![session("loaded", 1)],
+            next_cursor: Some("next".to_owned()),
+        }));
+
+        app.apply(WorkerMessage::Failed("second page failed".to_owned()));
+
+        assert_eq!(app.state(), &LoadState::Ready);
+        assert_eq!(app.sessions()[0].id.as_str(), "loaded");
+        assert_eq!(app.selected(), Some(0));
+        assert_eq!(app.warning(), Some("second page failed"));
+        assert!(!app.loading_more());
+    }
+
+    #[test]
+    fn appended_pages_preserve_selected_session_identity() {
+        let mut app = App::default();
+        app.apply(WorkerMessage::Page(SessionPage {
+            sessions: vec![session("selected", 2), session("older", 1)],
+            next_cursor: Some("next".to_owned()),
+        }));
+        app.navigate(Navigation::End);
+        app.navigate(Navigation::Up);
+        assert_eq!(
+            app.sessions()[app.selected().unwrap()].id.as_str(),
+            "selected"
+        );
+
+        app.apply(WorkerMessage::Page(SessionPage {
+            sessions: vec![session("newer", 3)],
+            next_cursor: None,
+        }));
+
+        assert_eq!(
+            app.sessions()[app.selected().unwrap()].id.as_str(),
+            "selected"
+        );
     }
 }
