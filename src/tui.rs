@@ -19,6 +19,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 pub fn run() -> Result<(), String> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
@@ -253,24 +254,46 @@ fn render_list(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, app:
 }
 
 fn session_line(session: &Session, width: usize) -> Line<'static> {
-    let age = format_age(session.recency_at, SystemTime::now());
-    let project = session.project_label();
-    let branch = session.branch.as_deref().unwrap_or("");
-    let metadata = if width >= 70 && !branch.is_empty() {
-        format!("{age:>4}  {project} [{branch}]  ")
-    } else {
-        format!("{age:>4}  {project}  ")
-    };
-    let available = width.saturating_sub(metadata.chars().count());
-    let preview = truncate(&session.preview, available);
+    let (metadata, preview) = session_parts(session, width);
     Line::from(vec![
         Span::styled(metadata, Style::default().fg(Color::Cyan)),
         Span::raw(preview),
     ])
 }
 
+fn session_parts(session: &Session, width: usize) -> (String, String) {
+    let age = format_age(session.recency_at, SystemTime::now());
+    let age = left_pad(&truncate(&age, 4), 4);
+    let age_segment = format!("{age}  ");
+    if width < display_width(&age_segment) {
+        return (truncate(&age_segment, width), String::new());
+    }
+    let available_after_age = width.saturating_sub(display_width(&age_segment));
+    let branch_segment = session
+        .branch
+        .as_deref()
+        .filter(|branch| width >= 70 && !branch.is_empty())
+        .map(|branch| format!(" [{}]  ", truncate(branch, 20)))
+        .unwrap_or_default();
+    let preview_reserve = 8;
+    let project_budget = available_after_age
+        .saturating_sub(display_width(&branch_segment))
+        .saturating_sub(preview_reserve)
+        .min(24);
+    let project = session.project_label();
+    let project_segment = if project_budget == 0 || project.is_empty() {
+        String::new()
+    } else {
+        format!("{}  ", truncate(&project, project_budget))
+    };
+    let metadata = format!("{age_segment}{project_segment}{branch_segment}");
+    let available = width.saturating_sub(display_width(&metadata));
+    let preview = truncate(&session.preview, available);
+    (metadata, preview)
+}
+
 fn truncate(value: &str, width: usize) -> String {
-    if value.chars().count() <= width {
+    if display_width(value) <= width {
         return value.to_owned();
     }
     if width == 0 {
@@ -279,7 +302,34 @@ fn truncate(value: &str, width: usize) -> String {
     if width == 1 {
         return "…".to_owned();
     }
-    value.chars().take(width - 1).chain(['…']).collect()
+    let content_width = width - 1;
+    let mut result = String::new();
+    let mut used_width = 0;
+    for character in value.chars() {
+        let character_width = character.width().unwrap_or(0);
+        if character_width == 0 && result.is_empty() {
+            continue;
+        }
+        if used_width + character_width > content_width {
+            break;
+        }
+        result.push(character);
+        used_width += character_width;
+    }
+    result.push('…');
+    result
+}
+
+fn display_width(value: &str) -> usize {
+    UnicodeWidthStr::width(value)
+}
+
+fn left_pad(value: &str, width: usize) -> String {
+    format!(
+        "{}{}",
+        " ".repeat(width.saturating_sub(display_width(value))),
+        value
+    )
 }
 
 struct TerminalGuard;
@@ -305,6 +355,7 @@ impl Drop for TerminalGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::SessionId;
 
     #[cfg(unix)]
     use std::fs;
@@ -321,6 +372,69 @@ mod tests {
         assert_eq!(truncate("hello", 4), "hel…");
         assert_eq!(truncate("hello", 1), "…");
         assert_eq!(truncate("hello", 0), "");
+
+        let wide = truncate("界界", 3);
+        assert_eq!(wide, "界…");
+        assert_eq!(display_width(&wide), 3);
+
+        let combining = truncate("e\u{301}xy", 2);
+        assert_eq!(combining, "e\u{301}…");
+        assert_eq!(display_width(&combining), 2);
+        assert_eq!(truncate("\u{301}界x", 2), "…");
+    }
+
+    #[test]
+    fn session_parts_fit_narrow_rows_and_prioritize_preview() {
+        let session = session(
+            "/tmp/界界界-project",
+            "preview with wide 文字",
+            Some("feature/界界界"),
+        );
+
+        for width in 0..=16 {
+            let (metadata, preview) = session_parts(&session, width);
+            assert!(display_width(&format!("{metadata}{preview}")) <= width);
+        }
+
+        let (metadata, preview) = session_parts(&session, 16);
+
+        assert!(!preview.is_empty());
+        assert!(!metadata.contains('['));
+    }
+
+    #[test]
+    fn session_parts_cap_metadata_at_display_cell_width() {
+        let session = session(
+            "/tmp/界界界界界界界界界界界界",
+            "preview with wide 文字",
+            Some("feature/界界界界界界界界界界界界"),
+        );
+
+        let (metadata, preview) = session_parts(&session, 69);
+        assert!(!metadata.contains('['));
+        assert!(metadata.contains('界'));
+        assert!(display_width(&format!("{metadata}{preview}")) <= 69);
+
+        let (metadata, preview) = session_parts(&session, 70);
+
+        assert!(metadata.contains('['));
+        assert!(display_width(&format!("{metadata}{preview}")) <= 70);
+        assert!(!preview.is_empty());
+    }
+
+    fn session(cwd: &str, preview: &str, branch: Option<&str>) -> Session {
+        Session {
+            id: SessionId::new("row").unwrap(),
+            name: None,
+            preview: preview.to_owned(),
+            cwd: cwd.to_owned(),
+            created_at: 0,
+            updated_at: 0,
+            recency_at: 0,
+            provider: String::new(),
+            status: String::new(),
+            branch: branch.map(str::to_owned),
+        }
     }
 
     #[test]
@@ -418,7 +532,7 @@ while IFS= read -r ignored; do :; done
             .map(|_| {
                 loader
                     .receiver
-                    .recv_timeout(Duration::from_secs(1))
+                    .recv_timeout(Duration::from_secs(2))
                     .unwrap()
             })
             .collect();
@@ -472,7 +586,7 @@ printf '%s\n' '{}'
             app.apply(
                 loader
                     .receiver
-                    .recv_timeout(Duration::from_secs(1))
+                    .recv_timeout(Duration::from_secs(2))
                     .unwrap(),
             );
         }

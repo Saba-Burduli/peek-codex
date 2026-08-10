@@ -27,6 +27,6 @@ Out of scope: AI summaries, telemetry, session mutation, direct storage parsing,
 - [x] Bound app-server requests and make loader shutdown deterministic.
 - [x] Reject repeated pagination cursors and preserve partial results and selection.
 - [x] Sanitize failure text and enforce the terminal-text length bound.
-- [ ] Render rows using terminal display-cell width.
+- [x] Render rows using terminal display-cell width.
 - [ ] Add explicit `A → B → A` cursor-cycle regression coverage.
 - [x] Add a fake-server page-success-then-RPC-error integration test.
