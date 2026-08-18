@@ -17,6 +17,10 @@ impl SessionId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    pub fn display(&self) -> String {
+        sanitize_terminal_text(&self.0)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -205,5 +209,13 @@ mod tests {
 
         let ids: Vec<_> = page.sessions.iter().map(|item| item.id.as_str()).collect();
         assert_eq!(ids, ["c", "a", "b"]);
+    }
+
+    #[test]
+    fn session_ids_are_sanitized_for_terminal_display() {
+        let id = SessionId::new("thread\n\u{1b}[31m\tpreview").unwrap();
+
+        assert_eq!(id.as_str(), "thread\n\u{1b}[31m\tpreview");
+        assert_eq!(id.display(), "thread [31m preview");
     }
 }

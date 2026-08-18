@@ -11,9 +11,10 @@
 
 ## Deferred
 
-- [ ] Enrich a selected session with a read-only peek.
+- [x] Enrich a selected session with a read-only metadata peek.
 - [ ] Restore the terminal and hand off with `codex resume <id>` on Enter.
-- [ ] Add search and project filtering.
+- [x] Add keyboard search across safe session metadata.
+- [ ] Add project-only filtering controls.
 - [ ] Inspect current Git state separately from captured session metadata.
 - [ ] Add a persistent cache.
 - [ ] Package release artifacts.

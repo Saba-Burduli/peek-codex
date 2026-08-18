@@ -1,4 +1,4 @@
-use crate::app::{App, LoadState, Navigation, WorkerMessage};
+use crate::app::{App, LoadState, Navigation, View, WorkerMessage};
 use crate::codex::{AppServerSource, CodexSessionSource};
 use crate::domain::{Session, format_age};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
@@ -11,7 +11,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 use std::collections::HashSet;
 use std::io::{self, IsTerminal};
 use std::path::Path;
@@ -149,19 +149,61 @@ fn event_loop(
             .map_err(|error| format!("terminal event poll failed: {error}"))?
             && let Event::Key(key) =
                 event::read().map_err(|error| format!("terminal input failed: {error}"))?
+            && handle_key(app, key)
         {
-            if should_quit(key) {
-                return Ok(());
-            }
-            match key.code {
-                KeyCode::Up | KeyCode::Char('k') => app.navigate(Navigation::Up),
-                KeyCode::Down | KeyCode::Char('j') => app.navigate(Navigation::Down),
-                KeyCode::Home => app.navigate(Navigation::Home),
-                KeyCode::End => app.navigate(Navigation::End),
-                _ => {}
-            }
+            return Ok(());
         }
     }
+}
+
+fn handle_key(app: &mut App, key: KeyEvent) -> bool {
+    if key.code == KeyCode::Esc {
+        if app.view() == View::Details {
+            app.close_details();
+        } else if app.is_searching() {
+            app.cancel_search();
+        } else {
+            return true;
+        }
+        return false;
+    }
+    if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        return true;
+    }
+    if app.view() == View::Details {
+        return key.code == KeyCode::Char('q');
+    }
+    if app.is_searching() {
+        match key.code {
+            KeyCode::Up => app.navigate(Navigation::Up),
+            KeyCode::Down => app.navigate(Navigation::Down),
+            KeyCode::Home => app.navigate(Navigation::Home),
+            KeyCode::End => app.navigate(Navigation::End),
+            KeyCode::Backspace => app.pop_search(),
+            KeyCode::Enter => app.open_selected(),
+            KeyCode::Char(character)
+                if !key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::ALT) =>
+            {
+                app.push_search(character)
+            }
+            _ => {}
+        }
+        return false;
+    }
+    if should_quit(key) {
+        return true;
+    }
+    match key.code {
+        KeyCode::Up | KeyCode::Char('k') => app.navigate(Navigation::Up),
+        KeyCode::Down | KeyCode::Char('j') => app.navigate(Navigation::Down),
+        KeyCode::Home => app.navigate(Navigation::Home),
+        KeyCode::End => app.navigate(Navigation::End),
+        KeyCode::Char('/') => app.begin_search(),
+        KeyCode::Enter => app.open_selected(),
+        _ => {}
+    }
+    false
 }
 
 fn should_quit(key: KeyEvent) -> bool {
@@ -172,7 +214,7 @@ fn should_quit(key: KeyEvent) -> bool {
 fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
     let footer_height = if app.warning().is_some() { 2 } else { 1 };
     let areas = Layout::vertical([
-        Constraint::Length(3),
+        Constraint::Length(4),
         Constraint::Min(1),
         Constraint::Length(footer_height),
     ])
@@ -180,46 +222,85 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
     let status = match app.state() {
         LoadState::Loading => "loading sessions".to_owned(),
         LoadState::Ready if app.warning().is_some() => {
-            format!("{} sessions · partial", app.sessions().len())
+            format!(
+                "{} of {} sessions · partial",
+                app.filtered_indices().len(),
+                app.sessions().len()
+            )
         }
         LoadState::Ready if app.loading_more() => {
-            format!("{} sessions · loading more", app.sessions().len())
+            format!(
+                "{} of {} sessions · loading more",
+                app.filtered_indices().len(),
+                app.sessions().len()
+            )
         }
-        LoadState::Ready => format!("{} sessions", app.sessions().len()),
+        LoadState::Ready => format!(
+            "{} of {} sessions",
+            app.filtered_indices().len(),
+            app.sessions().len()
+        ),
         LoadState::Empty => "no interactive sessions found".to_owned(),
         LoadState::Failed(_) => "integration error".to_owned(),
     };
     frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled("Peek Codex", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw("  "),
-            Span::styled(status, Style::default().fg(Color::DarkGray)),
-        ]))
+        Paragraph::new(vec![
+            Line::from(vec![
+                Span::styled(
+                    "Peek Codex / Sessions",
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("  "),
+                Span::styled(status, Style::default().fg(Color::DarkGray)),
+            ]),
+            Line::from(if app.is_searching() {
+                format!("Search: {}", app.search())
+            } else {
+                "Browse recent and older local Codex sessions. Press / to search.".to_owned()
+            }),
+        ])
         .block(Block::default().borders(Borders::BOTTOM)),
         areas[0],
     );
 
-    match app.state() {
-        LoadState::Failed(message) => frame.render_widget(
+    match (app.view(), app.state()) {
+        (View::Details, _) => render_details(frame, areas[1], app),
+        (_, LoadState::Failed(message)) => frame.render_widget(
             Paragraph::new(format!("Could not load sessions.\n\n{message}"))
                 .block(Block::bordered().title("Error"))
                 .style(Style::default().fg(Color::Red)),
             areas[1],
         ),
-        LoadState::Empty => frame.render_widget(
+        (_, LoadState::Empty) => frame.render_widget(
             Paragraph::new("No interactive Codex sessions are available.")
                 .block(Block::bordered().title("Sessions")),
             areas[1],
         ),
-        LoadState::Loading if app.sessions().is_empty() => frame.render_widget(
+        (_, LoadState::Loading) if app.sessions().is_empty() => frame.render_widget(
             Paragraph::new("Loading recent Codex sessions…")
                 .block(Block::bordered().title("Sessions")),
+            areas[1],
+        ),
+        _ if app.filtered_indices().is_empty() => frame.render_widget(
+            Paragraph::new(format!(
+                "No sessions match \"{}\".\n\nPress Backspace to refine the search or Esc to clear it.",
+                app.search()
+            ))
+            .block(Block::bordered().title("Sessions")),
             areas[1],
         ),
         _ => render_list(frame, areas[1], app),
     }
 
-    let keys = "↑/k ↓/j navigate  Home/End jump  q/Esc/Ctrl-C quit";
+    let keys = match app.view() {
+        View::Details => "Esc back  q/Ctrl-C quit",
+        View::Sessions if app.is_searching() => {
+            "type to filter  ↑/↓ navigate  Enter details  Backspace edit  Esc clear"
+        }
+        View::Sessions => {
+            "↑/k ↓/j navigate  Home/End jump  / search  Enter details  q/Esc/Ctrl-C quit"
+        }
+    };
     let footer = app
         .warning()
         .map(|warning| format!("Partial results: {warning}\n{keys}"))
@@ -236,21 +317,78 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
 
 fn render_list(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, app: &App) {
     let width = area.width.saturating_sub(4) as usize;
+    let visible = app.filtered_indices();
     let items: Vec<_> = app
-        .sessions()
-        .iter()
+        .filtered_indices()
+        .into_iter()
+        .filter_map(|index| app.sessions().get(index))
         .map(|session| ListItem::new(session_line(session, width)))
         .collect();
+    let title = if app.search().is_empty() {
+        "Sessions".to_owned()
+    } else {
+        format!("Sessions — {}", app.search())
+    };
     let list = List::new(items)
-        .block(Block::bordered().title("Sessions"))
+        .block(Block::bordered().title(title))
         .highlight_symbol("› ")
         .highlight_style(
             Style::default()
                 .bg(Color::DarkGray)
                 .add_modifier(Modifier::BOLD),
         );
-    let mut state = ListState::default().with_selected(app.selected());
+    let selected = app
+        .selected()
+        .and_then(|selected| visible.iter().position(|index| *index == selected));
+    let mut state = ListState::default().with_selected(selected);
     frame.render_stateful_widget(list, area, &mut state);
+}
+
+fn render_details(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, app: &App) {
+    let Some(session) = app.selected_session() else {
+        return;
+    };
+    let name = session.name.as_deref().unwrap_or("Untitled session");
+    let branch = session.branch.as_deref().unwrap_or("—");
+    let now = SystemTime::now();
+    let details = vec![
+        Line::from(Span::styled(
+            name.to_owned(),
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(format!("Project:   {}", session.project_label())),
+        Line::from(format!("Path:      {}", session.cwd)),
+        Line::from(format!("Branch:    {branch}")),
+        Line::from(format!("Provider:  {}", session.provider)),
+        Line::from(format!("Status:    {}", session.status)),
+        Line::from(format!(
+            "Created:   {} ago",
+            format_age(session.created_at, now)
+        )),
+        Line::from(format!(
+            "Updated:   {} ago",
+            format_age(session.updated_at, now)
+        )),
+        Line::from(format!("Session ID: {}", session.id.display())),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Summary",
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::from(session.preview.clone()),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Read-only metadata view. Conversation turns are not loaded.",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+    frame.render_widget(
+        Paragraph::new(details)
+            .block(Block::bordered().title("Session details"))
+            .wrap(Wrap { trim: true }),
+        area,
+    );
 }
 
 fn session_line(session: &Session, width: usize) -> Line<'static> {
@@ -448,6 +586,42 @@ mod tests {
             KeyCode::Char('c'),
             KeyModifiers::CONTROL
         )));
+    }
+
+    #[test]
+    fn routes_printable_search_keys_before_navigation_or_quit() {
+        let mut app = App::default();
+        let mut django = session("/tmp/django", "django", None);
+        django.id = SessionId::new("django").unwrap();
+        app.apply(WorkerMessage::Page(crate::domain::SessionPage {
+            sessions: vec![session("/tmp/alpha", "alpha", None), django],
+            next_cursor: None,
+        }));
+
+        assert!(!handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE)
+        ));
+        for character in "django".chars() {
+            assert!(!handle_key(
+                &mut app,
+                KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE),
+            ));
+        }
+        assert_eq!(app.search(), "django");
+        assert_eq!(app.selected_session().unwrap().project_label(), "django");
+        assert!(!handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
+        ));
+        assert_eq!(app.view(), View::Details);
+
+        app.close_details();
+        assert!(!handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)
+        ));
+        assert_eq!(app.search(), "djangoq");
     }
 
     #[cfg(unix)]

@@ -18,7 +18,7 @@ Each row shows age, project, optional captured branch, and preview. Text is sani
 
 ## R5 — Navigation and shutdown
 
-`Up`/`k`, `Down`/`j`, `Home`, and `End` preserve a valid selected session. Background appends and re-sorting preserve the selected session ID, falling back to the first row only if that session disappears. `q`, `Esc`, and `Ctrl-C` restore the terminal, cancel loading, stop app-server, and join the worker without leaving a child process.
+`Up`/`k`, `Down`/`j`, `Home`, and `End` preserve a valid selected session. Background appends and re-sorting preserve the selected session ID, falling back to the first row only if that session disappears. `Ctrl-C` always restores the terminal, cancels loading, stops app-server, and joins the worker without leaving a child process. Outside active text search, `q` exits; during search it is query text and `Esc` clears search or returns from session details before exiting the root Sessions view.
 
 ## R6 — CLI and diagnostics
 
@@ -31,3 +31,7 @@ macOS and Linux are supported with Codex CLI 0.146.0 as the minimum verified ver
 ## R8 — Independent QA gate
 
 Every tracked change receives a read-only testing-agent review before commit and push. The main agent owns all edits and regression tests, resolves every reproducible bug or requirement mismatch, obtains tester clearance, then commits, pushes, verifies remote SHA, and confirms CI.
+
+## R9 — Sessions-first discovery and inspection
+
+The root view is a Sessions overview that identifies the loaded and matching session count and explains keyboard discovery. `/` starts a live, case-insensitive search across safe session metadata; navigation stays within matching rows and keeps selection stable after search is cleared. `Enter` opens a read-only details view for the visible selection, showing safe metadata and the captured preview without loading conversation turns. `Esc` returns to Sessions from details.

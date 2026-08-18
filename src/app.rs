@@ -1,4 +1,4 @@
-use crate::domain::{Session, SessionPage, sanitize_terminal_text};
+use crate::domain::{Session, SessionId, SessionPage, sanitize_terminal_text};
 use std::collections::HashSet;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -17,6 +17,12 @@ pub enum Navigation {
     End,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum View {
+    Sessions,
+    Details,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum WorkerMessage {
     Page(SessionPage),
@@ -31,6 +37,10 @@ pub struct App {
     state: LoadState,
     loading_more: bool,
     warning: Option<String>,
+    search: String,
+    searching: bool,
+    search_restore_id: Option<SessionId>,
+    view: View,
 }
 
 impl Default for App {
@@ -41,6 +51,10 @@ impl Default for App {
             state: LoadState::Loading,
             loading_more: true,
             warning: None,
+            search: String::new(),
+            searching: false,
+            search_restore_id: None,
+            view: View::Sessions,
         }
     }
 }
@@ -64,6 +78,79 @@ impl App {
 
     pub fn warning(&self) -> Option<&str> {
         self.warning.as_deref()
+    }
+
+    pub fn search(&self) -> &str {
+        &self.search
+    }
+
+    pub fn is_searching(&self) -> bool {
+        self.searching
+    }
+
+    pub fn view(&self) -> View {
+        self.view
+    }
+
+    pub fn filtered_indices(&self) -> Vec<usize> {
+        let query = self.search.to_lowercase();
+        self.sessions
+            .iter()
+            .enumerate()
+            .filter_map(|(index, session)| session_matches(session, &query).then_some(index))
+            .collect()
+    }
+
+    pub fn selected_filtered_index(&self) -> Option<usize> {
+        let selected = self.selected?;
+        self.filtered_indices()
+            .iter()
+            .position(|index| *index == selected)
+    }
+
+    pub fn selected_session(&self) -> Option<&Session> {
+        self.selected.and_then(|index| self.sessions.get(index))
+    }
+
+    pub fn begin_search(&mut self) {
+        if !self.searching {
+            self.search_restore_id = self.selected_session().map(|session| session.id.clone());
+        }
+        self.searching = true;
+    }
+
+    pub fn push_search(&mut self, character: char) {
+        if self.searching {
+            self.search.push(character);
+            self.select_first_visible_if_needed();
+        }
+    }
+
+    pub fn pop_search(&mut self) {
+        if self.searching {
+            self.search.pop();
+            self.select_first_visible_if_needed();
+        }
+    }
+
+    pub fn cancel_search(&mut self) {
+        self.search.clear();
+        self.searching = false;
+        if let Some(id) = self.search_restore_id.take()
+            && let Some(index) = self.sessions.iter().position(|session| session.id == id)
+        {
+            self.selected = Some(index);
+        }
+    }
+
+    pub fn open_selected(&mut self) {
+        if self.selected_filtered_index().is_some() {
+            self.view = View::Details;
+        }
+    }
+
+    pub fn close_details(&mut self) {
+        self.view = View::Sessions;
     }
 
     pub fn apply(&mut self, message: WorkerMessage) {
@@ -92,17 +179,22 @@ impl App {
     }
 
     pub fn navigate(&mut self, navigation: Navigation) {
-        if self.sessions.is_empty() {
-            self.selected = None;
+        let visible = self.filtered_indices();
+        if visible.is_empty() {
             return;
         }
-        let last = self.sessions.len() - 1;
-        self.selected = Some(match (self.selected.unwrap_or(0), navigation) {
+        let last = visible.len() - 1;
+        let current = self.selected_filtered_index().unwrap_or(match navigation {
+            Navigation::End => last,
+            _ => 0,
+        });
+        let next = match (current, navigation) {
             (_, Navigation::Home) => 0,
             (_, Navigation::End) => last,
             (current, Navigation::Up) => current.saturating_sub(1),
             (current, Navigation::Down) => current.saturating_add(1).min(last),
-        });
+        };
+        self.selected = Some(visible[next]);
     }
 
     fn append_page(&mut self, page: SessionPage) {
@@ -142,6 +234,30 @@ impl App {
         self.loading_more = page.next_cursor.is_some();
         self.warning = None;
     }
+
+    fn select_first_visible_if_needed(&mut self) {
+        if self.selected_filtered_index().is_none()
+            && let Some(index) = self.filtered_indices().first()
+        {
+            self.selected = Some(*index);
+        }
+    }
+}
+
+fn session_matches(session: &Session, query: &str) -> bool {
+    if query.is_empty() {
+        return true;
+    }
+    [
+        session.name.as_deref().unwrap_or_default(),
+        &session.preview,
+        &session.cwd,
+        &session.provider,
+        &session.status,
+        session.branch.as_deref().unwrap_or_default(),
+    ]
+    .iter()
+    .any(|field| field.to_lowercase().contains(query))
 }
 
 fn sanitize_failure_message(message: &str) -> String {
@@ -222,6 +338,61 @@ mod tests {
         assert_eq!(app.selected(), Some(1));
         app.navigate(Navigation::Home);
         assert_eq!(app.selected(), Some(0));
+    }
+
+    #[test]
+    fn filters_sessions_and_navigates_only_visible_rows() {
+        let mut app = App::default();
+        let mut alpha = session("alpha", 3);
+        alpha.name = Some("Alpha release".to_owned());
+        alpha.branch = Some("feature/search".to_owned());
+        let mut beta = session("beta", 2);
+        beta.cwd = "/tmp/beta-project".to_owned();
+        let gamma = session("gamma", 1);
+        app.apply(WorkerMessage::Page(SessionPage {
+            sessions: vec![alpha, beta, gamma],
+            next_cursor: None,
+        }));
+
+        app.begin_search();
+        for character in "beta".chars() {
+            app.push_search(character);
+        }
+
+        assert_eq!(app.filtered_indices(), vec![1]);
+        assert_eq!(app.selected_session().unwrap().id.as_str(), "beta");
+
+        app.open_selected();
+        assert_eq!(app.view(), View::Details);
+        app.close_details();
+
+        app.cancel_search();
+        assert_eq!(app.filtered_indices(), vec![0, 1, 2]);
+        assert_eq!(app.selected_session().unwrap().id.as_str(), "alpha");
+    }
+
+    #[test]
+    fn opens_details_only_for_a_visible_selected_session() {
+        let mut app = App::default();
+        app.apply(WorkerMessage::Page(SessionPage {
+            sessions: vec![session("first", 1)],
+            next_cursor: None,
+        }));
+
+        app.begin_search();
+        app.push_search('f');
+        app.open_selected();
+        assert_eq!(app.view(), View::Details);
+        assert!(app.is_searching());
+        assert_eq!(app.search(), "f");
+        app.close_details();
+        assert_eq!(app.view(), View::Sessions);
+
+        app.cancel_search();
+        app.begin_search();
+        app.push_search('z');
+        app.open_selected();
+        assert_eq!(app.view(), View::Sessions);
     }
 
     #[test]
