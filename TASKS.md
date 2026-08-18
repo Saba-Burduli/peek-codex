@@ -14,6 +14,7 @@
 - [x] Enrich a selected session with a read-only metadata peek.
 - [ ] Restore the terminal and hand off with `codex resume <id>` on Enter.
 - [x] Add keyboard search across safe session metadata.
+- [x] Make Sessions and details project-centric without displaying agent-output previews.
 - [ ] Add project-only filtering controls.
 - [ ] Inspect current Git state separately from captured session metadata.
 - [ ] Add a persistent cache.

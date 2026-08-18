@@ -1,5 +1,5 @@
 use crate::domain::{Session, SessionId, SessionPage, sanitize_terminal_text};
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum LoadState {
@@ -21,6 +21,16 @@ pub enum Navigation {
 pub enum View {
     Sessions,
     Details,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProjectOverview {
+    pub label: String,
+    pub session_count: usize,
+    pub latest_activity: i64,
+    pub providers: Vec<String>,
+    pub statuses: Vec<String>,
+    pub branches: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -110,6 +120,47 @@ impl App {
 
     pub fn selected_session(&self) -> Option<&Session> {
         self.selected.and_then(|index| self.sessions.get(index))
+    }
+
+    pub fn project_count(&self) -> usize {
+        self.sessions
+            .iter()
+            .map(|session| session.cwd.as_str())
+            .collect::<BTreeSet<_>>()
+            .len()
+    }
+
+    pub fn selected_project_overview(&self) -> Option<ProjectOverview> {
+        let cwd = self.selected_session()?.cwd.clone();
+        let sessions: Vec<_> = self
+            .sessions
+            .iter()
+            .filter(|session| session.cwd == cwd)
+            .collect();
+        let latest_activity = sessions.iter().map(|session| session.recency_at).max()?;
+        Some(ProjectOverview {
+            label: sessions[0].project_label(),
+            session_count: sessions.len(),
+            latest_activity,
+            providers: sessions
+                .iter()
+                .map(|session| session.provider.clone())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect(),
+            statuses: sessions
+                .iter()
+                .map(|session| session.status.clone())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect(),
+            branches: sessions
+                .iter()
+                .filter_map(|session| session.branch.clone())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect(),
+        })
     }
 
     pub fn begin_search(&mut self) {
@@ -250,7 +301,6 @@ fn session_matches(session: &Session, query: &str) -> bool {
     }
     [
         session.name.as_deref().unwrap_or_default(),
-        &session.preview,
         &session.cwd,
         &session.provider,
         &session.status,
@@ -374,8 +424,10 @@ mod tests {
     #[test]
     fn opens_details_only_for_a_visible_selected_session() {
         let mut app = App::default();
+        let mut first = session("first", 1);
+        first.name = Some("First project check".to_owned());
         app.apply(WorkerMessage::Page(SessionPage {
-            sessions: vec![session("first", 1)],
+            sessions: vec![first],
             next_cursor: None,
         }));
 
@@ -393,6 +445,54 @@ mod tests {
         app.push_search('z');
         app.open_selected();
         assert_eq!(app.view(), View::Sessions);
+    }
+
+    #[test]
+    fn builds_project_overview_from_loaded_project_metadata() {
+        let mut app = App::default();
+        let mut newest = session("newest", 3);
+        newest.cwd = "/tmp/petty".to_owned();
+        newest.provider = "openai/cli".to_owned();
+        newest.status = "notLoaded".to_owned();
+        newest.branch = Some("main".to_owned());
+        let mut older = session("older", 2);
+        older.cwd = "/tmp/petty".to_owned();
+        older.provider = "openai/cli".to_owned();
+        older.status = "completed".to_owned();
+        older.branch = Some("feature/cards".to_owned());
+        let mut other = session("other", 1);
+        other.cwd = "/tmp/peek-codex".to_owned();
+        app.apply(WorkerMessage::Page(SessionPage {
+            sessions: vec![newest, older, other],
+            next_cursor: None,
+        }));
+
+        let overview = app.selected_project_overview().unwrap();
+        assert_eq!(app.project_count(), 2);
+        assert_eq!(overview.label, "petty");
+        assert_eq!(overview.session_count, 2);
+        assert_eq!(overview.latest_activity, 3);
+        assert_eq!(overview.providers, ["openai/cli"]);
+        assert_eq!(overview.statuses, ["completed", "notLoaded"]);
+        assert_eq!(overview.branches, ["feature/cards", "main"]);
+    }
+
+    #[test]
+    fn search_does_not_use_agent_output_preview() {
+        let mut app = App::default();
+        let mut session = session("title", 1);
+        session.name = Some("Project check-in".to_owned());
+        session.preview = "agent output that must not be searchable".to_owned();
+        app.apply(WorkerMessage::Page(SessionPage {
+            sessions: vec![session],
+            next_cursor: None,
+        }));
+
+        app.begin_search();
+        for character in "agent output".chars() {
+            app.push_search(character);
+        }
+        assert!(app.filtered_indices().is_empty());
     }
 
     #[test]

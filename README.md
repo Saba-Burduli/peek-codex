@@ -30,7 +30,7 @@ cargo build --locked
 
 ## Scope and safety
 
-This release is read-only. It talks to `codex app-server` over stdio and does not inspect Codex SQLite databases or JSONL rollout files. Conversation previews are sanitized before display and are never written to diagnostics. Session details deliberately show only safe metadata already returned by the list API; conversation turns are not loaded.
+This release is read-only. It talks to `codex app-server` over stdio and does not inspect Codex SQLite databases or JSONL rollout files. Agent-output previews are neither displayed nor searchable. Enter opens a project-derived summary from safe list metadata; conversation turns are not loaded.
 
 See [`TASKS.md`](TASKS.md) for the roadmap and [`docs/`](docs/) for product, architecture, integration, TUI, testing, and the small-commit delivery workflow.
 

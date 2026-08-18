@@ -1,6 +1,6 @@
 use crate::app::{App, LoadState, Navigation, View, WorkerMessage};
 use crate::codex::{AppServerSource, CodexSessionSource};
-use crate::domain::{Session, format_age};
+use crate::domain::{Session, display_provider, display_status, format_age};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
@@ -221,25 +221,9 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
     .split(frame.area());
     let status = match app.state() {
         LoadState::Loading => "loading sessions".to_owned(),
-        LoadState::Ready if app.warning().is_some() => {
-            format!(
-                "{} of {} sessions · partial",
-                app.filtered_indices().len(),
-                app.sessions().len()
-            )
-        }
-        LoadState::Ready if app.loading_more() => {
-            format!(
-                "{} of {} sessions · loading more",
-                app.filtered_indices().len(),
-                app.sessions().len()
-            )
-        }
-        LoadState::Ready => format!(
-            "{} of {} sessions",
-            app.filtered_indices().len(),
-            app.sessions().len()
-        ),
+        LoadState::Ready if app.warning().is_some() => session_status(app, "partial"),
+        LoadState::Ready if app.loading_more() => session_status(app, "loading more"),
+        LoadState::Ready => session_status(app, "loaded"),
         LoadState::Empty => "no interactive sessions found".to_owned(),
         LoadState::Failed(_) => "integration error".to_owned(),
     };
@@ -256,7 +240,7 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
             Line::from(if app.is_searching() {
                 format!("Search: {}", app.search())
             } else {
-                "Browse recent and older local Codex sessions. Press / to search.".to_owned()
+                "Browse projects through their saved Codex sessions. Press / to search.".to_owned()
             }),
         ])
         .block(Block::default().borders(Borders::BOTTOM)),
@@ -348,20 +332,68 @@ fn render_details(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, a
     let Some(session) = app.selected_session() else {
         return;
     };
-    let name = session.name.as_deref().unwrap_or("Untitled session");
+    let Some(project) = app.selected_project_overview() else {
+        return;
+    };
     let branch = session.branch.as_deref().unwrap_or("—");
     let now = SystemTime::now();
+    let providers = project
+        .providers
+        .iter()
+        .map(|provider| display_provider(provider))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let statuses = project
+        .statuses
+        .iter()
+        .map(|status| display_status(status))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let branches = if project.branches.is_empty() {
+        "—".to_owned()
+    } else {
+        project.branches.join(", ")
+    };
+    let project_summary = format!(
+        "{} has {} loaded local Codex {}. Latest project activity was {} ago.",
+        project.label,
+        project.session_count,
+        if project.session_count == 1 {
+            "session"
+        } else {
+            "sessions"
+        },
+        format_age(project.latest_activity, now),
+    );
     let details = vec![
         Line::from(Span::styled(
-            name.to_owned(),
+            project.label.clone(),
             Style::default().add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
+        Line::from(Span::styled(
+            "Project summary",
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::from(project_summary),
+        Line::from(format!("Sessions:  {} loaded", project.session_count)),
+        Line::from(format!("Providers: {providers}")),
+        Line::from(format!("Statuses:  {statuses}")),
+        Line::from(format!("Branches:  {branches}")),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Selected session",
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::from(format!("Name:      {}", session.title())),
         Line::from(format!("Project:   {}", session.project_label())),
         Line::from(format!("Path:      {}", session.cwd)),
         Line::from(format!("Branch:    {branch}")),
-        Line::from(format!("Provider:  {}", session.provider)),
-        Line::from(format!("Status:    {}", session.status)),
+        Line::from(format!(
+            "Provider:  {}",
+            display_provider(&session.provider)
+        )),
+        Line::from(format!("Status:    {}", display_status(&session.status))),
         Line::from(format!(
             "Created:   {} ago",
             format_age(session.created_at, now)
@@ -373,29 +405,23 @@ fn render_details(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, a
         Line::from(format!("Session ID: {}", session.id.display())),
         Line::from(""),
         Line::from(Span::styled(
-            "Summary",
-            Style::default().add_modifier(Modifier::BOLD),
-        )),
-        Line::from(session.preview.clone()),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Read-only metadata view. Conversation turns are not loaded.",
+            "Project summary is derived from loaded metadata; conversation turns and agent output are not shown.",
             Style::default().fg(Color::DarkGray),
         )),
     ];
     frame.render_widget(
         Paragraph::new(details)
-            .block(Block::bordered().title("Session details"))
+            .block(Block::bordered().title("Project details"))
             .wrap(Wrap { trim: true }),
         area,
     );
 }
 
 fn session_line(session: &Session, width: usize) -> Line<'static> {
-    let (metadata, preview) = session_parts(session, width);
+    let (metadata, title) = session_parts(session, width);
     Line::from(vec![
         Span::styled(metadata, Style::default().fg(Color::Cyan)),
-        Span::raw(preview),
+        Span::raw(title),
     ])
 }
 
@@ -413,10 +439,10 @@ fn session_parts(session: &Session, width: usize) -> (String, String) {
         .filter(|branch| width >= 70 && !branch.is_empty())
         .map(|branch| format!(" [{}]  ", truncate(branch, 20)))
         .unwrap_or_default();
-    let preview_reserve = 8;
+    let title_reserve = 8;
     let project_budget = available_after_age
         .saturating_sub(display_width(&branch_segment))
-        .saturating_sub(preview_reserve)
+        .saturating_sub(title_reserve)
         .min(24);
     let project = session.project_label();
     let project_segment = if project_budget == 0 || project.is_empty() {
@@ -426,8 +452,17 @@ fn session_parts(session: &Session, width: usize) -> (String, String) {
     };
     let metadata = format!("{age_segment}{project_segment}{branch_segment}");
     let available = width.saturating_sub(display_width(&metadata));
-    let preview = truncate(&session.preview, available);
-    (metadata, preview)
+    let title = truncate(session.title(), available);
+    (metadata, title)
+}
+
+fn session_status(app: &App, suffix: &str) -> String {
+    format!(
+        "{} of {} sessions · {} projects · {suffix}",
+        app.filtered_indices().len(),
+        app.sessions().len(),
+        app.project_count(),
+    )
 }
 
 fn truncate(value: &str, width: usize) -> String {
@@ -522,21 +557,23 @@ mod tests {
     }
 
     #[test]
-    fn session_parts_fit_narrow_rows_and_prioritize_preview() {
-        let session = session(
+    fn session_parts_fit_narrow_rows_and_prioritize_session_title() {
+        let mut session = session(
             "/tmp/界界界-project",
-            "preview with wide 文字",
+            "agent output that should not be shown",
             Some("feature/界界界"),
         );
+        session.name = Some("title with wide 文字".to_owned());
 
         for width in 0..=16 {
-            let (metadata, preview) = session_parts(&session, width);
-            assert!(display_width(&format!("{metadata}{preview}")) <= width);
+            let (metadata, title) = session_parts(&session, width);
+            assert!(display_width(&format!("{metadata}{title}")) <= width);
         }
 
-        let (metadata, preview) = session_parts(&session, 16);
+        let (metadata, title) = session_parts(&session, 16);
 
-        assert!(!preview.is_empty());
+        assert!(!title.is_empty());
+        assert!(!title.contains("agent output"));
         assert!(!metadata.contains('['));
     }
 
@@ -544,20 +581,20 @@ mod tests {
     fn session_parts_cap_metadata_at_display_cell_width() {
         let session = session(
             "/tmp/界界界界界界界界界界界界",
-            "preview with wide 文字",
+            "agent output that should not be shown",
             Some("feature/界界界界界界界界界界界界"),
         );
 
-        let (metadata, preview) = session_parts(&session, 69);
+        let (metadata, title) = session_parts(&session, 69);
         assert!(!metadata.contains('['));
         assert!(metadata.contains('界'));
-        assert!(display_width(&format!("{metadata}{preview}")) <= 69);
+        assert!(display_width(&format!("{metadata}{title}")) <= 69);
 
-        let (metadata, preview) = session_parts(&session, 70);
+        let (metadata, title) = session_parts(&session, 70);
 
         assert!(metadata.contains('['));
-        assert!(display_width(&format!("{metadata}{preview}")) <= 70);
-        assert!(!preview.is_empty());
+        assert!(display_width(&format!("{metadata}{title}")) <= 70);
+        assert!(!title.is_empty());
     }
 
     fn session(cwd: &str, preview: &str, branch: Option<&str>) -> Session {

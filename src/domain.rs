@@ -41,6 +41,10 @@ impl Session {
     pub fn project_label(&self) -> String {
         project_label(&self.cwd)
     }
+
+    pub fn title(&self) -> &str {
+        self.name.as_deref().unwrap_or("Untitled session")
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -102,11 +106,59 @@ pub fn sanitize_terminal_text(value: &str) -> String {
 
 pub fn project_label(cwd: &str) -> String {
     let path = Path::new(cwd);
-    path.file_name()
+    let label = path
+        .file_name()
         .and_then(|name| name.to_str())
         .filter(|name| !name.is_empty())
         .unwrap_or(cwd)
-        .to_owned()
+        .to_owned();
+    let is_home_directory = path
+        .parent()
+        .and_then(|parent| parent.file_name())
+        .and_then(|name| name.to_str())
+        .is_some_and(|parent| matches!(parent, "Users" | "home"));
+    if is_home_directory {
+        "Workspace".to_owned()
+    } else {
+        label
+    }
+}
+
+pub fn display_provider(provider: &str) -> String {
+    match provider
+        .split('/')
+        .next()
+        .unwrap_or_default()
+        .to_lowercase()
+        .as_str()
+    {
+        "openai" => "OpenAI".to_owned(),
+        _ => provider.to_owned(),
+    }
+}
+
+pub fn display_status(status: &str) -> String {
+    let mut result = String::with_capacity(status.len());
+    let mut previous_was_lowercase = false;
+    for character in status.chars() {
+        if matches!(character, '-' | '_') {
+            if !result.ends_with(' ') {
+                result.push(' ');
+            }
+            previous_was_lowercase = false;
+        } else {
+            if character.is_uppercase() && previous_was_lowercase {
+                result.push(' ');
+            }
+            result.extend(character.to_lowercase());
+            previous_was_lowercase = character.is_lowercase();
+        }
+    }
+    let mut characters = result.chars();
+    let Some(first) = characters.next() else {
+        return "Unknown".to_owned();
+    };
+    first.to_uppercase().collect::<String>() + characters.as_str()
 }
 
 pub fn format_age(timestamp: i64, now: SystemTime) -> String {
@@ -179,8 +231,21 @@ mod tests {
     #[test]
     fn derives_project_from_working_directory() {
         assert_eq!(project_label("/Users/example/project"), "project");
+        assert_eq!(project_label("/Users/example"), "Workspace");
+        assert_eq!(project_label("/home/example"), "Workspace");
         assert_eq!(project_label("/"), "/");
         assert_eq!(project_label(""), "");
+    }
+
+    #[test]
+    fn displays_session_metadata_for_people() {
+        let mut session = session("title", 0, 0);
+        session.name = Some("Project health check".to_owned());
+
+        assert_eq!(session.title(), "Project health check");
+        assert_eq!(display_provider("openai/cli"), "OpenAI");
+        assert_eq!(display_status("notLoaded"), "Not loaded");
+        assert_eq!(display_status("needs_review"), "Needs review");
     }
 
     #[test]

@@ -14,7 +14,7 @@ Loading, ready, empty, partial-results, and fatal-failure behavior is explicit. 
 
 ## R4 — Safe responsive rendering
 
-Each row shows age, project, optional captured branch, and preview. Text is sanitized, single-line, bounded, and truncated by terminal display-cell width. Branch metadata is removed first when space is constrained.
+Each row shows age, the captured project-folder label, optional captured branch, and the saved session title. Agent-output previews are never rendered or searchable. Text is sanitized, single-line, bounded, and truncated by terminal display-cell width. Branch metadata is removed first when space is constrained. A session launched from a home directory is labelled `Workspace`, never with the account-name folder.
 
 ## R5 — Navigation and shutdown
 
@@ -34,4 +34,4 @@ Every tracked change receives a read-only testing-agent review before commit and
 
 ## R9 — Sessions-first discovery and inspection
 
-The root view is a Sessions overview that identifies the loaded and matching session count and explains keyboard discovery. `/` starts a live, case-insensitive search across safe session metadata; navigation stays within matching rows and keeps selection stable after search is cleared. `Enter` opens a read-only details view for the visible selection, showing safe metadata and the captured preview without loading conversation turns. `Esc` returns to Sessions from details.
+The root view is a Sessions overview that identifies the loaded and matching session count and project count, and explains keyboard discovery. `/` starts a live, case-insensitive search across safe session metadata excluding agent-output previews; navigation stays within matching rows and keeps selection stable after search is cleared. `Enter` opens a read-only project details view for the visible selection, showing a derived project summary (loaded session count, latest activity, providers, statuses, and branches) plus the selected session's metadata. It never displays the captured preview or loads conversation turns. `Esc` returns to Sessions from details.
