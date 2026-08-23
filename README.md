@@ -12,10 +12,10 @@ Peek Codex is a fast, read-only terminal browser for local Codex sessions. The f
 ## Run
 
 ```sh
-go run ./cmd/peek-codex
+./scripts/launch.sh
 ```
 
-Use `--help`, `--version`, or `--log-file <PATH>`. Diagnostics are silent unless a log file is explicitly requested.
+The launcher always runs the current checkout without relying on a prebuilt temporary binary. Use `--help`, `--version`, or `--log-file <PATH>` after the launcher command. Diagnostics are silent unless a log file is explicitly requested.
 
 Sessions is the first screen. Use `Up`/`k`, `Down`/`j`, `Home`, and `End` to move; press `/` for fuzzy search across safe metadata, `Enter` for a read-only details view, and `q`/`Ctrl-C` to exit. While typing a search, every printable key—including `j`, `k`, and `q`—is query text; use arrows to move filtered rows and `Esc` to clear search or return from details before exiting Sessions.
 
@@ -26,6 +26,7 @@ go mod verify
 test -z "$(gofmt -l .)"
 go vet -mod=readonly ./...
 go test -mod=readonly -race ./...
+sh scripts/test-launcher.sh
 go build -mod=readonly -o /tmp/peek-codex ./cmd/peek-codex
 go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
 "$(go env GOPATH)/bin/govulncheck" ./...
