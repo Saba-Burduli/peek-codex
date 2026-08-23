@@ -5,6 +5,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"time"
@@ -65,7 +66,7 @@ type pageMsg struct {
 
 func New(ctx context.Context, factory SourceFactory) *Model {
 	ctx, cancel := context.WithCancel(ctx)
-	delegate := list.NewDefaultDelegate()
+	delegate := sessionDelegate{DefaultDelegate: list.NewDefaultDelegate()}
 	delegate.Styles.NormalTitle = lipgloss.NewStyle().Foreground(lipgloss.Color("#e6edf3")).PaddingLeft(2)
 	delegate.Styles.NormalDesc = lipgloss.NewStyle().Foreground(lipgloss.Color("#8b949e")).PaddingLeft(2)
 	delegate.Styles.SelectedTitle = lipgloss.NewStyle().Border(lipgloss.NormalBorder(), false, false, false, true).BorderForeground(lipgloss.Color("#58a6ff")).Foreground(lipgloss.Color("#58a6ff")).Bold(true).PaddingLeft(1)
@@ -402,13 +403,32 @@ func (model *Model) projectCount() int {
 
 type sessionItem struct{ session domain.Session }
 
+type sessionDelegate struct{ list.DefaultDelegate }
+
+func (delegate sessionDelegate) Render(writer io.Writer, model list.Model, index int, item list.Item) {
+	session, ok := item.(sessionItem)
+	if ok && session.session.Branch != "" {
+		fullWidth := lipgloss.Width(session.description(true))
+		available := max(model.Width()-4, 0)
+		if fullWidth > available {
+			session.session.Branch = ""
+			item = session
+		}
+	}
+	delegate.DefaultDelegate.Render(writer, model, index, item)
+}
+
 func (item sessionItem) Title() string {
 	return fmt.Sprintf("%-4s  %s", domain.FormatAge(item.session.RecencyAt, time.Now()), item.session.Title())
 }
 
 func (item sessionItem) Description() string {
+	return item.description(true)
+}
+
+func (item sessionItem) description(includeBranch bool) string {
 	metadata := item.session.ProjectLabel() + "  ·  " + domain.DisplayProvider(item.session.Provider) + "  ·  " + domain.DisplayStatus(item.session.Status)
-	if item.session.Branch != "" {
+	if includeBranch && item.session.Branch != "" {
 		metadata += "  [" + item.session.Branch + "]"
 	}
 	return metadata

@@ -1,10 +1,10 @@
 # Testing strategy
 
-Unit tests cover ordering, age formatting, project labels, text sanitization, navigation bounds, selection identity, UI states, partial failures, repeated cursors, and page appending. Redacted JSON fixtures cover unknown fields, missing optional metadata, nested source values, commands/file-change content that must not leak into domain values, and malformed RPC errors.
+Go unit tests cover ordering, age formatting, project labels, text sanitization, fuzzy-search preview exclusion, navigation, selection identity through filtered pagination, loading/empty/failure states, partial failures, repeated cursors, and Bubble Tea key routing. Adapter tests cover unknown fields, unstable `path` exclusion, nested source values, malformed RPC errors, timeout, and cancellation without requiring personal history.
 
 An integration test places a fake `codex` executable first on a controlled path and verifies the initialize/initialized handshake plus cursor pagination. Tests never require personal Codex history.
 
-Release validation uses formatting, Clippy with warnings denied, tests, a locked build, and a PTY smoke test against the installed Codex app-server.
+Release validation uses `gofmt` verification, `go vet`, race-enabled tests, a Go build, and a PTY smoke test against the installed Codex app-server.
 
 ## Independent testing-agent gate
 

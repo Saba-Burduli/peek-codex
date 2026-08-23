@@ -8,6 +8,7 @@ import (
 
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/Saba-Burduli/peek-codex/internal/codex"
 	"github.com/Saba-Burduli/peek-codex/internal/domain"
@@ -35,6 +36,21 @@ func TestBranchIsTruncatedAfterCoreMetadata(t *testing.T) {
 	description := item.Description()
 	if strings.Index(description, "OpenAI") > strings.Index(description, "[very-long-branch-name]") {
 		t.Fatalf("branch did not follow provider metadata: %q", description)
+	}
+}
+
+func TestNarrowRowsOmitBranchInsteadOfShowingAPartialBranch(t *testing.T) {
+	model := readyModel(t)
+	_, _ = model.Update(tea.WindowSizeMsg{Width: 32, Height: 20})
+	item := session("one", "Project", "/tmp/peek", 1)
+	item.Branch = "very-long-branch-name"
+	model.handlePage(pageMsg{page: domain.SessionPage{Sessions: []domain.Session{item}}})
+	rendered := ansi.Strip(model.list.View())
+	if strings.Contains(rendered, "[very") || strings.Contains(rendered, "branch-name") {
+		t.Fatalf("narrow row rendered branch metadata: %q", rendered)
+	}
+	if !strings.Contains(rendered, "OpenAI") {
+		t.Fatalf("narrow row lost provider before branch: %q", rendered)
 	}
 }
 

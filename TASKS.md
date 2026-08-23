@@ -5,7 +5,7 @@
 - [x] Establish repository guidance, documentation, ADRs, and MIT licensing.
 - [x] Add the typed session domain and Codex app-server adapter.
 - [x] Test parsing, pagination, malformed errors, and a fake app-server handshake.
-- [x] Add the responsive session-list TUI and CLI.
+- [x] Add the responsive Bubble Tea/Bubbles session-list TUI and Go CLI.
 - [x] Model loading, ready, empty, and failure states.
 - [x] Validate formatting, linting, tests, locked build, and a real PTY smoke test.
 
@@ -21,7 +21,7 @@
 - [ ] Package release artifacts.
 - [ ] Add Windows-specific process handoff.
 
-Out of scope: AI summaries, telemetry, session mutation, direct storage parsing, an async runtime, and fuzzy-search dependencies.
+Out of scope: AI summaries, telemetry, session mutation, direct storage parsing, persistent cache, and packaging.
 
 ## Quality hardening
 
@@ -29,6 +29,6 @@ Out of scope: AI summaries, telemetry, session mutation, direct storage parsing,
 - [x] Bound app-server requests and make loader shutdown deterministic.
 - [x] Reject repeated pagination cursors and preserve partial results and selection.
 - [x] Sanitize failure text and enforce the terminal-text length bound.
-- [x] Render rows using terminal display-cell width.
+- [x] Render rows with Bubbles display-cell-aware truncation.
 - [ ] Add explicit `A → B → A` cursor-cycle regression coverage.
 - [x] Add a fake-server page-success-then-RPC-error integration test.

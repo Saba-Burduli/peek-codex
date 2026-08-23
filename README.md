@@ -5,32 +5,33 @@ Peek Codex is a fast, read-only terminal browser for local Codex sessions. The f
 ## Requirements
 
 - macOS or Linux
-- Rust 1.97.1 (pinned by `rust-toolchain.toml`)
+- Go 1.25 or newer
 - Codex CLI 0.146.0 or newer on `PATH`
 - An interactive terminal
 
 ## Run
 
 ```sh
-cargo run --locked
+go run ./cmd/peek-codex
 ```
 
 Use `--help`, `--version`, or `--log-file <PATH>`. Diagnostics are silent unless a log file is explicitly requested.
 
-Sessions is the first screen. Use `Up`/`k`, `Down`/`j`, `Home`, and `End` to move; press `/` to search safe session metadata live, `Enter` for a read-only details view, and `q`/`Ctrl-C` to exit. While typing a search, every printable key—including `j`, `k`, and `q`—is query text; use arrows to move the filtered list and `Esc` to clear search or return from details before exiting Sessions.
+Sessions is the first screen. Use `Up`/`k`, `Down`/`j`, `Home`, and `End` to move; press `/` for fuzzy search across safe metadata, `Enter` for a read-only details view, and `q`/`Ctrl-C` to exit. While typing a search, every printable key—including `j`, `k`, and `q`—is query text; use arrows to move filtered rows and `Esc` to clear search or return from details before exiting Sessions.
 
 ## Validate
 
 ```sh
-cargo fmt --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test
-cargo build --locked
+go mod verify
+test -z "$(gofmt -l .)"
+go vet -mod=readonly ./...
+go test -mod=readonly -race ./...
+go build -mod=readonly -o /tmp/peek-codex ./cmd/peek-codex
 ```
 
 ## Scope and safety
 
-This release is read-only. It talks to `codex app-server` over stdio and does not inspect Codex SQLite databases or JSONL rollout files. Agent-output previews are neither displayed nor searchable. Enter opens a project-derived summary from safe list metadata; conversation turns are not loaded.
+This release is read-only. It uses Bubble Tea, Bubbles, and Lip Gloss over `codex app-server` stdio; it does not inspect Codex SQLite databases or JSONL rollout files. Agent-output previews are neither displayed nor searchable. Enter opens a project-derived summary from safe list metadata; conversation turns are not loaded.
 
 See [`TASKS.md`](TASKS.md) for the roadmap and [`docs/`](docs/) for product, architecture, integration, TUI, testing, and the small-commit delivery workflow.
 

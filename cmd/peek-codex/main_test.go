@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"os"
 	"strings"
 	"testing"
 )
@@ -24,5 +25,16 @@ func TestHelpAndVersionDoNotNeedATerminal(t *testing.T) {
 	stdout.Reset()
 	if err := run([]string{"--version"}, &stdout); err != nil || !strings.Contains(stdout.String(), version) {
 		t.Fatalf("version = %q, %v", stdout.String(), err)
+	}
+}
+
+func TestDevNullIsNotAnInteractiveTerminal(t *testing.T) {
+	file, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = file.Close() })
+	if isTerminal(file) {
+		t.Fatal("character device /dev/null was accepted as a terminal")
 	}
 }

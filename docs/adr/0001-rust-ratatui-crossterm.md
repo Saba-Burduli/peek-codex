@@ -1,15 +1,15 @@
 # ADR 0001: Rust with Ratatui and Crossterm
 
-Status: accepted
+Status: superseded by ADR 0003
 
 ## Decision
 
-Use Rust 1.97.1, edition 2024, Ratatui 0.30.2, and Crossterm 0.29 for the initial application.
+The initial release used Rust 1.97.1, edition 2024, Ratatui 0.30.2, and Crossterm 0.29.
 
 ## Rationale
 
-Rust produces a fast distributable binary and makes process and terminal cleanup explicit. Ratatui supplies composable terminal widgets; Crossterm supplies portable terminal events and is the normal Ratatui backend for application use.
+This was sufficient for the first vertical slice, but did not provide the mature reusable list, spinner, help, fuzzy-filtering, and viewport component ecosystem selected for Peek Codex.
 
 ## Consequences
 
-The repository pins the compiler and commits `Cargo.lock`. Initial platform support is macOS and Linux. The application avoids an async runtime until concurrency requirements justify it.
+The Rust implementation and toolchain pin are removed during the Go cutover. Git history preserves the original implementation.

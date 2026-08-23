@@ -11,6 +11,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"golang.org/x/term"
 
 	"github.com/Saba-Burduli/peek-codex/internal/codex"
 	"github.com/Saba-Burduli/peek-codex/internal/ui"
@@ -95,8 +96,7 @@ func parseArgs(args []string) (options, error) {
 }
 
 func isTerminal(file *os.File) bool {
-	info, err := file.Stat()
-	return err == nil && info.Mode()&os.ModeCharDevice != 0
+	return term.IsTerminal(int(file.Fd()))
 }
 
 type diagnostics struct{ file *os.File }
