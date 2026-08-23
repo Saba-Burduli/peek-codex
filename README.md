@@ -27,7 +27,13 @@ test -z "$(gofmt -l .)"
 go vet -mod=readonly ./...
 go test -mod=readonly -race ./...
 go build -mod=readonly -o /tmp/peek-codex ./cmd/peek-codex
+go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
+"$(go env GOPATH)/bin/govulncheck" ./...
 ```
+
+## Continuous integration
+
+GitHub Actions validates pull requests and pushes to `main`. It caches Go dependencies, cancels superseded runs for the same branch or pull request, and runs the validation commands above with a 10-minute job limit. A manual run remains available through `workflow_dispatch`.
 
 ## Scope and safety
 
