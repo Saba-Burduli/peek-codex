@@ -16,6 +16,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/Saba-Burduli/peek-codex/internal/codex"
 	"github.com/Saba-Burduli/peek-codex/internal/domain"
@@ -49,6 +50,8 @@ type Model struct {
 	nextCursor  string
 	selectedID  domain.SessionID
 	restoreID   domain.SessionID
+	detail      domain.Session
+	hasDetail   bool
 	loading     bool
 	failure     string
 	warning     string
@@ -269,6 +272,9 @@ func (model *Model) resize() {
 	model.list.SetSize(model.width, available)
 	model.viewport.SetWidth(model.width)
 	model.viewport.SetHeight(available)
+	if model.screen == detailsScreen && model.hasDetail {
+		model.viewport.SetContent(model.detailsContent(model.detail))
+	}
 }
 
 func (model *Model) syncSelection() {
@@ -309,9 +315,15 @@ func (model *Model) openDetails() {
 	if !ok {
 		return
 	}
-	model.selectedID = item.session.ID
+	model.showDetails(item.session)
+}
+
+func (model *Model) showDetails(session domain.Session) {
+	model.selectedID = session.ID
+	model.detail = session
+	model.hasDetail = true
 	model.screen = detailsScreen
-	model.viewport.SetContent(model.detailsContent(item.session))
+	model.viewport.SetContent(model.detailsContent(model.detail))
 	model.viewport.GotoTop()
 }
 
@@ -321,11 +333,61 @@ func (model *Model) detailsContent(session domain.Session) string {
 	if len(project.branches) > 0 {
 		branches = strings.Join(project.branches, ", ")
 	}
-	return fmt.Sprintf("%s\n\nProject summary\n%s has %d loaded local Codex %s. Latest project activity was %s ago.\nSessions:  %d loaded\nProviders: %s\nStatuses:  %s\nBranches:  %s\n\nSelected session\nName:       %s\nProject:    %s\nPath:       %s\nBranch:     %s\nProvider:   %s\nStatus:     %s\nCreated:    %s ago\nUpdated:    %s ago\nSession ID: %s\n\nProject summary is derived from loaded metadata; conversation turns and agent output are not shown.\n\nEsc back  q/Ctrl-C quit",
-		project.label, project.label, project.count, plural(project.count, "session", "sessions"), domain.FormatAge(project.latest, time.Now()), project.count,
-		strings.Join(project.providers, ", "), strings.Join(project.statuses, ", "), branches,
-		session.Title(), session.ProjectLabel(), session.CWD, emptyAsDash(session.Branch), domain.DisplayProvider(session.Provider), domain.DisplayStatus(session.Status),
-		domain.FormatAge(session.CreatedAt, time.Now()), domain.FormatAge(session.UpdatedAt, time.Now()), session.ID.Display())
+	cardWidth := max(model.width-6, 1)
+	if model.width >= 88 {
+		cardWidth = max((model.width-6)/2, 1)
+	}
+	panels := []string{
+		detailPanel("Project overview", cardWidth, []detailField{
+			{"Project", project.label},
+			{"Sessions", fmt.Sprintf("%d loaded", project.count)},
+			{"Latest activity", domain.FormatAge(project.latest, time.Now()) + " ago"},
+		}),
+		detailPanel("Project signals", cardWidth, []detailField{
+			{"Providers", strings.Join(project.providers, ", ")},
+			{"Statuses", strings.Join(project.statuses, ", ")},
+			{"Branches", branches},
+		}),
+		detailPanel("Selected session", cardWidth, []detailField{
+			{"Name", session.Title()},
+			{"Project", session.ProjectLabel()},
+			{"Path", session.CWD},
+			{"Thread ID", session.ID.Display()},
+		}),
+		detailPanel("Session activity", cardWidth, []detailField{
+			{"Provider", domain.DisplayProvider(session.Provider)},
+			{"Status", domain.DisplayStatus(session.Status)},
+			{"Branch", emptyAsDash(session.Branch)},
+			{"Created", domain.FormatAge(session.CreatedAt, time.Now()) + " ago"},
+			{"Updated", domain.FormatAge(session.UpdatedAt, time.Now()) + " ago"},
+		}),
+	}
+	content := lipgloss.JoinVertical(lipgloss.Left, panels...)
+	if model.width >= 88 {
+		content = lipgloss.JoinVertical(lipgloss.Left,
+			lipgloss.JoinHorizontal(lipgloss.Top, panels[0], "  ", panels[1]),
+			lipgloss.JoinHorizontal(lipgloss.Top, panels[2], "  ", panels[3]),
+		)
+	}
+	return content + "\n\nProject panels use loaded metadata only; conversation turns and agent output are not shown.\n\nEsc back  q/Ctrl-C quit"
+}
+
+type detailField struct{ label, value string }
+
+func detailPanel(title string, width int, fields []detailField) string {
+	valueWidth := max(width-18, 1)
+	lines := make([]string, 0, len(fields)+1)
+	lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#58a6ff")).Render(title))
+	for _, field := range fields {
+		value := ansi.Truncate(domain.SanitizeTerminalText(field.value), valueWidth, "…")
+		lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color("#8b949e")).Render(field.label+": ")+value)
+	}
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#30363d")).
+		Padding(0, 1).
+		Width(width).
+		Render(strings.Join(lines, "\n"))
 }
 
 type projectSummary struct {
@@ -367,7 +429,11 @@ func (model *Model) header() string {
 	default:
 		status = fmt.Sprintf("%d loaded · %d projects", len(model.sessions), model.projectCount())
 	}
-	line := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#58a6ff")).Render("Peek Codex / Sessions") + "  " + lipgloss.NewStyle().Foreground(lipgloss.Color("#8b949e")).Render(status)
+	screenLabel := "Sessions"
+	if model.screen == detailsScreen {
+		screenLabel = "Session details"
+	}
+	line := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#58a6ff")).Render("Peek Codex / "+screenLabel) + "  " + lipgloss.NewStyle().Foreground(lipgloss.Color("#8b949e")).Render(status)
 	if model.screen == sessionsScreen && model.list.FilterState() == list.Unfiltered {
 		line += "\nBrowse safe project metadata · / fuzzy search · Enter project details"
 	}

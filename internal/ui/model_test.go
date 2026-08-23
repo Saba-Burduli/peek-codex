@@ -103,14 +103,49 @@ func TestDetailsAreProjectMetadataOnly(t *testing.T) {
 	second := session("two", "Fix compile", "/tmp/peek", 20)
 	second.Provider, second.Status, second.Branch = "openai/cli", "idle", "main"
 	model.sessions = []domain.Session{first, second}
-	content := model.detailsContent(first)
-	for _, expected := range []string{"2 loaded local Codex sessions", "Providers: OpenAI", "Statuses:  Idle, Not loaded", "Branches:  main"} {
+	content := ansi.Strip(model.detailsContent(first))
+	for _, expected := range []string{"Project overview", "Project signals", "Selected session", "Session activity", "Sessions: 2 loaded", "Providers: OpenAI", "Statuses: Idle, Not loaded", "Branches: main", "Thread ID: one"} {
 		if !strings.Contains(content, expected) {
 			t.Errorf("details did not contain %q", expected)
 		}
 	}
 	if strings.Contains(content, first.Preview) {
 		t.Fatal("preview leaked into details")
+	}
+}
+
+func TestDetailsUseFourResponsivePanels(t *testing.T) {
+	model := readyModel(t)
+	item := session("one", "Project health", "/tmp/peek", 10)
+	model.sessions = []domain.Session{item}
+
+	wide := ansi.Strip(model.detailsContent(item))
+	for _, panel := range []string{"Project overview", "Project signals", "Selected session", "Session activity"} {
+		if strings.Count(wide, panel) != 1 {
+			t.Fatalf("wide details panel %q count = %d, want 1", panel, strings.Count(wide, panel))
+		}
+	}
+
+	model.width = 60
+	narrow := ansi.Strip(model.detailsContent(item))
+	if strings.Count(narrow, "Project overview") != 1 || strings.Count(narrow, "Session activity") != 1 {
+		t.Fatalf("narrow details did not retain all panels: %q", narrow)
+	}
+}
+
+func TestDetailsReflowWhenTerminalResizes(t *testing.T) {
+	model := readyModel(t)
+	item := session("one", "Project health", "/tmp/peek", 10)
+	model.sessions = []domain.Session{item}
+	model.showDetails(item)
+	if !panelsShareLine(ansi.Strip(model.viewport.View()), "Project overview", "Project signals") {
+		t.Fatal("wide detail view did not use a two-column grid")
+	}
+
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 60, Height: 30})
+	model = updated.(*Model)
+	if panelsShareLine(ansi.Strip(model.viewport.View()), "Project overview", "Project signals") {
+		t.Fatal("narrow detail view retained the wide two-column grid")
 	}
 }
 
@@ -220,6 +255,15 @@ func press(text string) tea.KeyPressMsg {
 }
 
 func special(code rune) tea.KeyPressMsg { return tea.KeyPressMsg(tea.Key{Code: code}) }
+
+func panelsShareLine(content, first, second string) bool {
+	for _, line := range strings.Split(content, "\n") {
+		if strings.Contains(line, first) && strings.Contains(line, second) {
+			return true
+		}
+	}
+	return false
+}
 
 func session(id, name, cwd string, recency int64) domain.Session {
 	return domain.Session{
